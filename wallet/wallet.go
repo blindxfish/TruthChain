@@ -2,7 +2,6 @@ package wallet
 
 import (
 	"crypto/ecdsa"
-	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/pem"
@@ -11,6 +10,8 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/btcsuite/btcd/btcec/v2"
+	btcecdsa "github.com/btcsuite/btcd/btcec/v2/ecdsa"
 	"github.com/btcsuite/btcutil/base58"
 	secp "github.com/decred/dcrd/dcrec/secp256k1/v4"
 	"golang.org/x/crypto/ripemd160"
@@ -190,17 +191,13 @@ func (w *Wallet) ExportPrivateKeyHex() string {
 	return hex.EncodeToString(w.PrivateKey.Serialize())
 }
 
-// Sign signs data with the wallet's private key
+// Sign signs data with the wallet's private key using compact signature format
 func (w *Wallet) Sign(data []byte) ([]byte, error) {
 	// Hash the data first (best practice for ECDSA)
 	hash := sha256.Sum256(data)
 
-	// Sign the hash using ECDSA
-	signature, err := ecdsa.SignASN1(rand.Reader, w.PrivateKey.ToECDSA(), hash[:])
-	if err != nil {
-		return nil, fmt.Errorf("failed to sign data: %w", err)
-	}
-
+	// Sign using compact signature format for public key recovery
+	signature := btcecdsa.SignCompact(w.PrivateKey, hash[:], true)
 	return signature, nil
 }
 
@@ -209,8 +206,18 @@ func (w *Wallet) Verify(data []byte, signature []byte) (bool, error) {
 	// Hash the data first
 	hash := sha256.Sum256(data)
 
-	// Verify the signature using ECDSA
-	return ecdsa.VerifyASN1(w.PublicKey.ToECDSA(), hash[:], signature), nil
+	// Recover public key from compact signature
+	recoveredPubKey, _, err := btcecdsa.RecoverCompact(signature, hash[:])
+	if err != nil {
+		return false, fmt.Errorf("failed to recover public key: %w", err)
+	}
+
+	// Compare with our public key
+	if !recoveredPubKey.IsEqual(w.PublicKey) {
+		return false, fmt.Errorf("recovered public key does not match")
+	}
+
+	return true, nil
 }
 
 // VerifySignature verifies a signature against data and a given public key
@@ -313,6 +320,21 @@ func LoadOrCreateWallet(walletPath string) (*Wallet, error) {
 // NewTestnetWallet creates a new wallet for testnet
 func NewTestnetWallet(name string) (*Wallet, error) {
 	return NewWalletWithMetadata(name, TruthChainTestnetVersion)
+}
+
+// DeriveAddress derives a TruthChain address from a btcec public key
+func DeriveAddress(pub *btcec.PublicKey) string {
+	pubBytes := pub.SerializeCompressed()
+	sha := sha256.Sum256(pubBytes)
+	ripemd := ripemd160.New()
+	ripemd.Write(sha[:])
+	hashed := ripemd.Sum(nil)
+
+	payload := append([]byte{0x00}, hashed...) // Version byte for mainnet
+	checksum := sha256.Sum256(payload)
+	checksum = sha256.Sum256(checksum[:])
+	full := append(payload, checksum[:4]...)
+	return base58.Encode(full)
 }
 
 // NewMultisigWallet creates a new wallet for multisig (placeholder for future implementation)

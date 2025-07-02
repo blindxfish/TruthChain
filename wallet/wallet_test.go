@@ -143,11 +143,7 @@ func TestSignAndVerify(t *testing.T) {
 	// Test with different data (should fail)
 	invalidData := []byte("Different data")
 	valid, err = wallet.Verify(invalidData, signature)
-	if err != nil {
-		t.Fatalf("Failed to verify signature with invalid data: %v", err)
-	}
-
-	if valid {
+	if err == nil && valid {
 		t.Error("Signature verification should have failed with different data")
 	}
 }

@@ -10,6 +10,7 @@ import (
 
 	"github.com/blindxfish/truthchain/wallet"
 	"github.com/btcsuite/btcd/btcec/v2"
+	"github.com/decred/dcrd/dcrec/secp256k1/v4/ecdsa"
 	"golang.org/x/crypto/ripemd160"
 )
 
@@ -169,33 +170,34 @@ func (bc *Blockchain) CreatePost(content string, w *wallet.Wallet) (*Post, error
 }
 
 // VerifyPostSignature verifies a post's signature and validates authorship
-// Note: This is a simplified verification that checks signature format
-// In a full implementation, we would need to recover the public key from the signature
-// and verify it matches the author address. For now, we'll use a placeholder approach.
 func (bc *Blockchain) VerifyPostSignature(post Post) (bool, error) {
-	// Decode signature
+	message := fmt.Sprintf("%s%s%d", post.Author, post.Content, post.Timestamp)
+	hash := sha256.Sum256([]byte(message))
+
 	signatureBytes, err := hex.DecodeString(post.Signature)
 	if err != nil {
-		return false, fmt.Errorf("invalid signature format: %w", err)
+		return false, fmt.Errorf("invalid signature encoding: %w", err)
 	}
 
-	// Verify signature format (ASN.1 DER)
-	if len(signatureBytes) < 6 {
-		return false, fmt.Errorf("signature too short")
+	// Recover public key
+	pubKey, wasCompressed, err := ecdsa.RecoverCompact(signatureBytes, hash[:])
+	if err != nil {
+		return false, fmt.Errorf("signature recovery failed: %w", err)
 	}
 
-	// Basic ASN.1 structure validation
-	if signatureBytes[0] != 0x30 {
-		return false, fmt.Errorf("invalid ASN.1 sequence tag")
+	if !wasCompressed {
+		return false, fmt.Errorf("signature must be compressed format")
 	}
 
-	// For now, we'll accept any properly formatted signature
-	// In a production system, you would:
-	// - Recover the public key from the signature
-	// - Derive the address from the public key
-	// - Compare with post.Author
-	// - Verify the signature cryptographically
+	// Derive address from recovered public key
+	derivedAddress := wallet.DeriveAddress(pubKey)
 
+	// Compare with post.Author
+	if derivedAddress != post.Author {
+		return false, fmt.Errorf("address mismatch: expected %s, got %s", post.Author, derivedAddress)
+	}
+
+	// All good
 	return true, nil
 }
 
