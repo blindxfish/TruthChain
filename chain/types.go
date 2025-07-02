@@ -135,6 +135,45 @@ func (b *Block) ValidateBlock() error {
 	return nil
 }
 
+// ValidateBlockWithThreshold validates a block structure with post count threshold rules
+func (b *Block) ValidateBlockWithThreshold(postThreshold int) error {
+	// First run basic validation
+	if err := b.ValidateBlock(); err != nil {
+		return err
+	}
+
+	// Genesis block is always valid (no posts)
+	if b.Index == 0 {
+		return nil
+	}
+
+	// Enforce post count threshold rules
+	postCount := len(b.Posts)
+
+	// Block must have exactly the threshold number of posts (unless it's a forced block)
+	if postCount != postThreshold {
+		return fmt.Errorf("block %d has invalid post count: expected %d, got %d (fork protection)",
+			b.Index, postThreshold, postCount)
+	}
+
+	// Additional security: ensure posts are not empty
+	if postCount == 0 {
+		return fmt.Errorf("block %d has no posts (fork protection)", b.Index)
+	}
+
+	// Validate that all posts have valid content
+	for i, post := range b.Posts {
+		if post.Content == "" {
+			return fmt.Errorf("block %d has empty post at index %d (fork protection)", b.Index, i)
+		}
+		if post.Author == "" {
+			return fmt.Errorf("block %d has post without author at index %d (fork protection)", b.Index, i)
+		}
+	}
+
+	return nil
+}
+
 // GetCharacterCount returns the total number of characters in the block
 func (b *Block) GetCharacterCount() int {
 	count := 0
@@ -185,7 +224,7 @@ func FromJSON(data []byte) (*Block, error) {
 func CreateGenesisBlock() *Block {
 	block := &Block{
 		Index:     0,
-		Timestamp: time.Now().Unix(),
+		Timestamp: MainnetGenesisTimestamp,
 		PrevHash:  "",
 		Posts:     []Post{},
 		CharCount: 0,

@@ -73,14 +73,16 @@ Nodes earn characters based on uptime, not proof-of-work. Character issuance dec
 - ✅ Define Post and Block structs
 - ✅ Implement hash, sign, and verify methods
 - ✅ Collect valid posts in memory
-- ✅ Commit block when N characters are accumulated
+- ✅ Commit block when N posts are accumulated (configurable threshold)
 - ✅ **Secure signature verification with public key recovery**
+- ✅ **Bonus**: Post count thresholds, automatic mempool discharge, fork protection
 
-### Milestone 3: Local Storage (BoltDB) ⏳ **PENDING**
-- ⏳ Save/load blocks
-- ⏳ Save posts by hash
-- ⏳ Track current block index
-- ⏳ Track total characters owned per user
+### Milestone 3: Local Storage (BoltDB) ✅ **COMPLETE**
+- ✅ Save/load blocks with persistent storage
+- ✅ Save posts by hash with duplicate detection
+- ✅ Track current block index and chain length
+- ✅ Track pending posts in mempool with persistence
+- ✅ **Bonus**: Mempool discharge, post count thresholds, fork protection
 
 ### Milestone 4: Uptime Tracker ⏳ **PENDING**
 - ⏳ Node logs uptime (heartbeats)
@@ -168,6 +170,10 @@ Daily cap ensures chain size grows at a predictable rate:
 - **Immutable Storage**: Once posted, content cannot be modified
 - **Censorship Resistance**: Distributed network prevents single points of failure
 - **Verifiable History**: Complete audit trail of all posts and transfers
+- **Fork Protection**: Hardcoded mainnet rules prevent malicious forks
+- **Genesis Block Validation**: Ensures all nodes start from the same chain
+- **Post Count Thresholds**: Configurable block creation rules with validation
+- **Mempool Persistence**: Pending posts survive node restarts
 
 ## 📚 Documentation
 
@@ -233,16 +239,28 @@ Last Used: 2024-01-15 10:30:45
 
 ### CLI Features
 
-#### Milestone 2: Block & Post Logic ✅ **AVAILABLE**
+#### Milestone 2 & 3: Block, Post & Storage ✅ **AVAILABLE**
 ```bash
-# Post a message to the blockchain
+# Post a message to the blockchain (5 posts trigger block creation)
 go run cmd/main.go --post "Hello, TruthChain!"
 
-# View recent posts
+# View recent posts and pending mempool
 go run cmd/main.go --posts
 
-# View blockchain status
+# View blockchain status and statistics
 go run cmd/main.go --status
+
+# View recent blocks
+go run cmd/main.go --blocks
+
+# View mempool (pending posts)
+go run cmd/main.go --mempool
+
+# Force create a block from pending posts
+go run cmd/main.go --force-block
+
+# Use custom post threshold (for testing)
+go run cmd/main.go --post-threshold 3 --post "Test post"
 ```
 
 #### Milestone 5: Local HTTP API

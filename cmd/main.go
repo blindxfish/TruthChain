@@ -6,7 +6,9 @@ import (
 	"log"
 	"os"
 
+	"github.com/blindxfish/truthchain/blockchain"
 	"github.com/blindxfish/truthchain/chain"
+	"github.com/blindxfish/truthchain/store"
 	"github.com/blindxfish/truthchain/wallet"
 )
 
@@ -19,13 +21,15 @@ func main() {
 		network    = flag.String("network", "mainnet", "Network type: mainnet, testnet, multisig")
 		walletName = flag.String("name", "", "Wallet name for new wallets")
 
-		// Blockchain commands
+		// Storage and blockchain commands
+		dbPath        = flag.String("db", "truthchain.db", "Path to database file")
 		postContent   = flag.String("post", "", "Post content to the blockchain")
 		showPosts     = flag.Bool("posts", false, "Show recent posts")
 		showBlocks    = flag.Bool("blocks", false, "Show recent blocks")
 		showStatus    = flag.Bool("status", false, "Show blockchain status")
+		showMempool   = flag.Bool("mempool", false, "Show mempool (pending posts)")
 		forceBlock    = flag.Bool("force-block", false, "Force creation of a new block")
-		charThreshold = flag.Int("char-threshold", 1000, "Character threshold for block creation")
+		postThreshold = flag.Int("post-threshold", chain.MainnetMinPosts, "Number of posts needed for block creation")
 	)
 	flag.Parse()
 
@@ -62,8 +66,18 @@ func main() {
 		}
 	}
 
-	// Initialize blockchain
-	blockchain := chain.NewBlockchain(*charThreshold)
+	// Initialize storage
+	storage, err := store.NewBoltDBStorage(*dbPath)
+	if err != nil {
+		log.Fatalf("Failed to initialize storage: %v", err)
+	}
+	defer storage.Close()
+
+	// Initialize blockchain with storage
+	blockchain, err := blockchain.NewBlockchain(storage, *postThreshold)
+	if err != nil {
+		log.Fatalf("Failed to initialize blockchain: %v", err)
+	}
 
 	// Handle wallet-only commands
 	if *showWallet {
@@ -106,9 +120,9 @@ func main() {
 		fmt.Printf("Post Hash: %s\n", post.Hash)
 		fmt.Printf("Author: %s\n", post.Author)
 		fmt.Printf("Characters: %d\n", post.GetCharacterCount())
-		fmt.Printf("Pending Characters: %d/%d\n", blockchain.GetPendingCharacterCount(), *charThreshold)
+		fmt.Printf("Pending Posts: %d/%d\n", blockchain.GetPendingPostCount(), *postThreshold)
 
-		if blockchain.GetPendingCharacterCount() >= *charThreshold {
+		if blockchain.GetPendingPostCount() >= *postThreshold {
 			fmt.Printf("✅ New block created!\n")
 		}
 		return
@@ -116,7 +130,11 @@ func main() {
 
 	if *showPosts {
 		// Show recent posts from latest block
-		latestBlock := blockchain.GetLatestBlock()
+		latestBlock, err := blockchain.GetLatestBlock()
+		if err != nil {
+			log.Fatalf("Failed to get latest block: %v", err)
+		}
+
 		if latestBlock != nil && len(latestBlock.Posts) > 0 {
 			fmt.Printf("Recent posts from block %d:\n", latestBlock.Index)
 			fmt.Printf("Block Hash: %s\n\n", latestBlock.Hash)
@@ -137,14 +155,28 @@ func main() {
 		pendingCount := blockchain.GetPendingPostCount()
 		if pendingCount > 0 {
 			fmt.Printf("Pending posts (%d):\n", pendingCount)
-			fmt.Printf("Pending characters: %d/%d\n", blockchain.GetPendingCharacterCount(), *charThreshold)
+			fmt.Printf("Pending posts: %d/%d\n", blockchain.GetPendingPostCount(), *postThreshold)
+
+			// Show pending posts details
+			pendingPosts := blockchain.GetPendingPosts()
+			for i, post := range pendingPosts {
+				fmt.Printf("  ⏳ Pending Post %d:\n", i+1)
+				fmt.Printf("    Author: %s\n", post.Author)
+				fmt.Printf("    Content: %s\n", post.Content)
+				fmt.Printf("    Characters: %d\n", post.GetCharacterCount())
+				fmt.Printf("    Hash: %s\n", post.Hash)
+				fmt.Printf("    Timestamp: %d\n\n", post.Timestamp)
+			}
 		}
 		return
 	}
 
 	if *showBlocks {
 		// Show recent blocks
-		chainLength := blockchain.GetChainLength()
+		chainLength, err := blockchain.GetChainLength()
+		if err != nil {
+			log.Fatalf("Failed to get chain length: %v", err)
+		}
 		fmt.Printf("Blockchain length: %d blocks\n\n", chainLength)
 
 		// Show last 5 blocks (or all if less than 5)
@@ -154,7 +186,10 @@ func main() {
 		}
 
 		for i := start; i < chainLength; i++ {
-			block := blockchain.GetBlockByIndex(i)
+			block, err := blockchain.GetBlockByIndex(i)
+			if err != nil {
+				continue
+			}
 			if block != nil {
 				fmt.Printf("Block %d:\n", block.Index)
 				fmt.Printf("  Hash: %s\n", block.Hash)
@@ -169,7 +204,11 @@ func main() {
 
 	if *showStatus {
 		// Show blockchain status
-		info := blockchain.GetBlockchainInfo()
+		info, err := blockchain.GetBlockchainInfo()
+		if err != nil {
+			log.Fatalf("Failed to get blockchain info: %v", err)
+		}
+
 		fmt.Printf("TruthChain Status:\n")
 		fmt.Printf("  Chain Length: %v\n", info["chain_length"])
 		fmt.Printf("  Total Posts: %v\n", info["total_post_count"])
@@ -177,7 +216,7 @@ func main() {
 		fmt.Printf("  Pending Posts: %v\n", info["pending_post_count"])
 		fmt.Printf("  Pending Characters: %v/%v\n", info["pending_character_count"], info["character_threshold"])
 
-		if latestBlock := blockchain.GetLatestBlock(); latestBlock != nil {
+		if latestBlock, err := blockchain.GetLatestBlock(); err == nil && latestBlock != nil {
 			fmt.Printf("  Latest Block: %d\n", latestBlock.Index)
 			fmt.Printf("  Latest Block Hash: %s\n", latestBlock.Hash)
 		}
@@ -187,6 +226,30 @@ func main() {
 			fmt.Printf("  Chain Validation: ❌ %v\n", err)
 		} else {
 			fmt.Printf("  Chain Validation: ✅ Valid\n")
+		}
+		return
+	}
+
+	if *showMempool {
+		// Show mempool information
+		mempoolInfo := blockchain.GetMempoolInfo()
+		fmt.Printf("TruthChain Mempool:\n")
+		fmt.Printf("  Pending Posts: %v\n", mempoolInfo["pending_post_count"])
+		fmt.Printf("  Pending Characters: %v/%v\n", mempoolInfo["pending_character_count"], mempoolInfo["character_threshold"])
+
+		posts := mempoolInfo["posts"].([]map[string]interface{})
+		if len(posts) > 0 {
+			fmt.Printf("\nPending Posts:\n")
+			for i, post := range posts {
+				fmt.Printf("  ⏳ Post %d:\n", i+1)
+				fmt.Printf("    Hash: %s\n", post["hash"])
+				fmt.Printf("    Author: %s\n", post["author"])
+				fmt.Printf("    Content: %s\n", post["content"])
+				fmt.Printf("    Characters: %v\n", post["characters"])
+				fmt.Printf("    Timestamp: %v\n\n", post["timestamp"])
+			}
+		} else {
+			fmt.Printf("\nNo pending posts in mempool.\n")
 		}
 		return
 	}
@@ -204,8 +267,13 @@ func main() {
 			log.Fatalf("Failed to force create block: %v", err)
 		}
 
+		chainLength, err := blockchain.GetChainLength()
+		if err != nil {
+			log.Fatalf("Failed to get chain length: %v", err)
+		}
+
 		fmt.Printf("✅ Block created successfully!\n")
-		fmt.Printf("New block index: %d\n", blockchain.GetChainLength()-1)
+		fmt.Printf("New block index: %d\n", chainLength-1)
 		return
 	}
 
@@ -213,8 +281,9 @@ func main() {
 	fmt.Printf("TruthChain node starting...\n")
 	fmt.Printf("Wallet Address: %s\n", w.GetAddress())
 	fmt.Printf("Wallet File: %s\n", *walletPath)
+	fmt.Printf("Database File: %s\n", *dbPath)
 	fmt.Printf("Network: %s\n", w.GetNetwork())
-	fmt.Printf("Character Threshold: %d\n", *charThreshold)
+	fmt.Printf("Post Threshold: %d\n", *postThreshold)
 
 	if *debug {
 		fmt.Printf("Public Key (compressed): %s\n", w.ExportPublicKeyHex())
@@ -223,7 +292,11 @@ func main() {
 	}
 
 	// Show blockchain status
-	info := blockchain.GetBlockchainInfo()
+	info, err := blockchain.GetBlockchainInfo()
+	if err != nil {
+		log.Fatalf("Failed to get blockchain info: %v", err)
+	}
+
 	fmt.Printf("Blockchain Status:\n")
 	fmt.Printf("  Chain Length: %v\n", info["chain_length"])
 	fmt.Printf("  Pending Posts: %v\n", info["pending_post_count"])
