@@ -9,30 +9,71 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"time"
 
 	"github.com/btcsuite/btcutil/base58"
 	secp "github.com/decred/dcrd/dcrec/secp256k1/v4"
 	"golang.org/x/crypto/ripemd160"
 )
 
+// Version byte constants for different networks
+const (
+	TruthChainMainnetVersion  = 0x00
+	TruthChainTestnetVersion  = 0x6F
+	TruthChainMultisigVersion = 0x05
+)
+
+// WalletMetadata contains additional information about the wallet
+type WalletMetadata struct {
+	Name        string    `json:"name"`
+	Created     time.Time `json:"created"`
+	LastUsed    time.Time `json:"last_used"`
+	Notes       string    `json:"notes"`
+	Network     string    `json:"network"` // "mainnet", "testnet", etc.
+	VersionByte byte      `json:"version_byte"`
+}
+
 // Wallet represents a TruthChain wallet with secp256k1 keypair
 type Wallet struct {
 	PrivateKey *secp.PrivateKey
 	PublicKey  *secp.PublicKey
 	Address    string
+	Metadata   *WalletMetadata
 }
 
 // NewWallet creates a new secp256k1 wallet
 func NewWallet() (*Wallet, error) {
+	return NewWalletWithMetadata("", TruthChainMainnetVersion)
+}
+
+// NewWalletWithMetadata creates a new wallet with custom metadata
+func NewWalletWithMetadata(name string, versionByte byte) (*Wallet, error) {
 	privateKey, err := secp.GeneratePrivateKey()
 	if err != nil {
 		return nil, fmt.Errorf("failed to generate private key: %w", err)
 	}
 
+	// Determine network name based on version byte
+	network := "mainnet"
+	if versionByte == TruthChainTestnetVersion {
+		network = "testnet"
+	} else if versionByte == TruthChainMultisigVersion {
+		network = "multisig"
+	}
+
+	metadata := &WalletMetadata{
+		Name:        name,
+		Created:     time.Now(),
+		LastUsed:    time.Now(),
+		Network:     network,
+		VersionByte: versionByte,
+	}
+
 	wallet := &Wallet{
 		PrivateKey: privateKey,
 		PublicKey:  privateKey.PubKey(),
-		Address:    generateAddress(privateKey.PubKey()),
+		Address:    generateAddressWithVersion(privateKey.PubKey(), versionByte),
+		Metadata:   metadata,
 	}
 
 	return wallet, nil
@@ -57,10 +98,27 @@ func LoadWallet(walletPath string) (*Wallet, error) {
 
 	privateKey := secp.PrivKeyFromBytes(block.Bytes)
 
+	// Try to load metadata from separate file
+	metadataPath := walletPath + ".meta"
+	metadata := &WalletMetadata{
+		Name:        filepath.Base(walletPath),
+		Created:     time.Now(),
+		LastUsed:    time.Now(),
+		Network:     "mainnet",
+		VersionByte: TruthChainMainnetVersion,
+	}
+
+	if metaData, err := os.ReadFile(metadataPath); err == nil {
+		// TODO: Implement JSON unmarshaling for metadata
+		// For now, use default metadata
+		_ = metaData
+	}
+
 	wallet := &Wallet{
 		PrivateKey: privateKey,
 		PublicKey:  privateKey.PubKey(),
-		Address:    generateAddress(privateKey.PubKey()),
+		Address:    generateAddressWithVersion(privateKey.PubKey(), metadata.VersionByte),
+		Metadata:   metadata,
 	}
 
 	return wallet, nil
@@ -88,12 +146,33 @@ func (w *Wallet) SaveWallet(walletPath string) error {
 		return fmt.Errorf("failed to write wallet file: %w", err)
 	}
 
+	// Update last used time
+	if w.Metadata != nil {
+		w.Metadata.LastUsed = time.Now()
+	}
+
 	return nil
 }
 
 // GetAddress returns the wallet's public address
 func (w *Wallet) GetAddress() string {
 	return w.Address
+}
+
+// GetNetwork returns the wallet's network (mainnet, testnet, etc.)
+func (w *Wallet) GetNetwork() string {
+	if w.Metadata != nil {
+		return w.Metadata.Network
+	}
+	return "mainnet"
+}
+
+// GetVersionByte returns the wallet's version byte
+func (w *Wallet) GetVersionByte() byte {
+	if w.Metadata != nil {
+		return w.Metadata.VersionByte
+	}
+	return TruthChainMainnetVersion
 }
 
 // ExportPublicKeyHex returns the compressed public key as a hex string
@@ -145,6 +224,11 @@ func VerifySignature(data []byte, signature []byte, publicKey *secp.PublicKey) (
 
 // generateAddress creates a Bitcoin-style Base58Check address from the public key
 func generateAddress(publicKey *secp.PublicKey) string {
+	return generateAddressWithVersion(publicKey, TruthChainMainnetVersion)
+}
+
+// generateAddressWithVersion creates a Bitcoin-style Base58Check address with custom version byte
+func generateAddressWithVersion(publicKey *secp.PublicKey, versionByte byte) string {
 	// Get compressed public key bytes
 	pubBytes := publicKey.SerializeCompressed()
 
@@ -156,8 +240,8 @@ func generateAddress(publicKey *secp.PublicKey) string {
 	ripemd.Write(sha[:])
 	hashed := ripemd.Sum(nil)
 
-	// Create versioned payload (0x00 for TruthChain mainnet)
-	versionedPayload := append([]byte{0x00}, hashed...)
+	// Create versioned payload
+	versionedPayload := append([]byte{versionByte}, hashed...)
 
 	// Double SHA256 for checksum
 	checksum := sha256.Sum256(versionedPayload)
@@ -172,14 +256,19 @@ func generateAddress(publicKey *secp.PublicKey) string {
 
 // ValidateAddress checks if a given address is valid
 func ValidateAddress(address string) bool {
+	return ValidateAddressWithVersion(address, TruthChainMainnetVersion)
+}
+
+// ValidateAddressWithVersion checks if a given address is valid for a specific version
+func ValidateAddressWithVersion(address string, expectedVersion byte) bool {
 	// Decode Base58Check
 	decoded := base58.Decode(address)
 	if len(decoded) < 5 {
 		return false
 	}
 
-	// Check version byte (0x00 for TruthChain)
-	if decoded[0] != 0x00 {
+	// Check version byte
+	if decoded[0] != expectedVersion {
 		return false
 	}
 
@@ -219,4 +308,14 @@ func LoadOrCreateWallet(walletPath string) (*Wallet, error) {
 	}
 
 	return wallet, nil
+}
+
+// NewTestnetWallet creates a new wallet for testnet
+func NewTestnetWallet(name string) (*Wallet, error) {
+	return NewWalletWithMetadata(name, TruthChainTestnetVersion)
+}
+
+// NewMultisigWallet creates a new wallet for multisig (placeholder for future implementation)
+func NewMultisigWallet(name string) (*Wallet, error) {
+	return NewWalletWithMetadata(name, TruthChainMultisigVersion)
 }

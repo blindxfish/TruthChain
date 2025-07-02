@@ -2,6 +2,7 @@ package wallet
 
 import (
 	"testing"
+	"time"
 )
 
 func TestNewWallet(t *testing.T) {
@@ -23,8 +24,46 @@ func TestNewWallet(t *testing.T) {
 	}
 
 	// Test address validation
-	if !ValidateAddress(wallet.Address) {
+	if !ValidateAddressWithVersion(wallet.Address, wallet.GetVersionByte()) {
 		t.Errorf("Generated address is invalid: %s", wallet.Address)
+	}
+
+	// Test metadata
+	if wallet.Metadata == nil {
+		t.Error("Metadata is nil")
+	} else {
+		if wallet.Metadata.Network != "mainnet" {
+			t.Errorf("Expected network 'mainnet', got '%s'", wallet.Metadata.Network)
+		}
+		if wallet.Metadata.VersionByte != TruthChainMainnetVersion {
+			t.Errorf("Expected version byte 0x%02X, got 0x%02X", TruthChainMainnetVersion, wallet.Metadata.VersionByte)
+		}
+	}
+}
+
+func TestNewWalletWithMetadata(t *testing.T) {
+	wallet, err := NewWalletWithMetadata("Test Wallet", TruthChainTestnetVersion)
+	if err != nil {
+		t.Fatalf("Failed to create new wallet with metadata: %v", err)
+	}
+
+	if wallet.Metadata == nil {
+		t.Error("Metadata is nil")
+	} else {
+		if wallet.Metadata.Name != "Test Wallet" {
+			t.Errorf("Expected name 'Test Wallet', got '%s'", wallet.Metadata.Name)
+		}
+		if wallet.Metadata.Network != "testnet" {
+			t.Errorf("Expected network 'testnet', got '%s'", wallet.Metadata.Network)
+		}
+		if wallet.Metadata.VersionByte != TruthChainTestnetVersion {
+			t.Errorf("Expected version byte 0x%02X, got 0x%02X", TruthChainTestnetVersion, wallet.Metadata.VersionByte)
+		}
+	}
+
+	// Test address validation with correct version
+	if !ValidateAddressWithVersion(wallet.Address, TruthChainTestnetVersion) {
+		t.Errorf("Generated testnet address is invalid: %s", wallet.Address)
 	}
 }
 
@@ -38,12 +77,46 @@ func TestAddressGeneration(t *testing.T) {
 	}
 
 	// Addresses should be valid
-	if !ValidateAddress(wallet1.Address) {
+	if !ValidateAddressWithVersion(wallet1.Address, wallet1.GetVersionByte()) {
 		t.Errorf("Wallet 1 address is invalid: %s", wallet1.Address)
 	}
 
-	if !ValidateAddress(wallet2.Address) {
+	if !ValidateAddressWithVersion(wallet2.Address, wallet2.GetVersionByte()) {
 		t.Errorf("Wallet 2 address is invalid: %s", wallet2.Address)
+	}
+}
+
+func TestNetworkSpecificWallets(t *testing.T) {
+	// Test mainnet wallet
+	mainnetWallet, err := NewWallet()
+	if err != nil {
+		t.Fatalf("Failed to create mainnet wallet: %v", err)
+	}
+	if mainnetWallet.GetNetwork() != "mainnet" {
+		t.Errorf("Expected mainnet, got %s", mainnetWallet.GetNetwork())
+	}
+
+	// Test testnet wallet
+	testnetWallet, err := NewTestnetWallet("Testnet Wallet")
+	if err != nil {
+		t.Fatalf("Failed to create testnet wallet: %v", err)
+	}
+	if testnetWallet.GetNetwork() != "testnet" {
+		t.Errorf("Expected testnet, got %s", testnetWallet.GetNetwork())
+	}
+
+	// Test multisig wallet
+	multisigWallet, err := NewMultisigWallet("Multisig Wallet")
+	if err != nil {
+		t.Fatalf("Failed to create multisig wallet: %v", err)
+	}
+	if multisigWallet.GetNetwork() != "multisig" {
+		t.Errorf("Expected multisig, got %s", multisigWallet.GetNetwork())
+	}
+
+	// Addresses should be different due to different version bytes
+	if mainnetWallet.Address == testnetWallet.Address {
+		t.Error("Mainnet and testnet wallets generated the same address")
 	}
 }
 
@@ -106,10 +179,25 @@ func TestExportMethods(t *testing.T) {
 }
 
 func TestAddressValidation(t *testing.T) {
-	// Test valid address
-	wallet, _ := NewWallet()
-	if !ValidateAddress(wallet.Address) {
-		t.Errorf("Valid address failed validation: %s", wallet.Address)
+	// Test valid mainnet address
+	mainnetWallet, _ := NewWallet()
+	if !ValidateAddressWithVersion(mainnetWallet.Address, TruthChainMainnetVersion) {
+		t.Errorf("Valid mainnet address failed validation: %s", mainnetWallet.Address)
+	}
+
+	// Test valid testnet address
+	testnetWallet, _ := NewTestnetWallet("Test")
+	if !ValidateAddressWithVersion(testnetWallet.Address, TruthChainTestnetVersion) {
+		t.Errorf("Valid testnet address failed validation: %s", testnetWallet.Address)
+	}
+
+	// Test cross-validation (should fail)
+	if ValidateAddressWithVersion(mainnetWallet.Address, TruthChainTestnetVersion) {
+		t.Error("Mainnet address should not validate as testnet")
+	}
+
+	if ValidateAddressWithVersion(testnetWallet.Address, TruthChainMainnetVersion) {
+		t.Error("Testnet address should not validate as mainnet")
 	}
 
 	// Test invalid addresses
@@ -125,5 +213,48 @@ func TestAddressValidation(t *testing.T) {
 		if ValidateAddress(addr) {
 			t.Errorf("Invalid address passed validation: %s", addr)
 		}
+	}
+}
+
+func TestVersionConstants(t *testing.T) {
+	// Test that version constants are different
+	if TruthChainMainnetVersion == TruthChainTestnetVersion {
+		t.Error("Mainnet and testnet version bytes should be different")
+	}
+	if TruthChainMainnetVersion == TruthChainMultisigVersion {
+		t.Error("Mainnet and multisig version bytes should be different")
+	}
+	if TruthChainTestnetVersion == TruthChainMultisigVersion {
+		t.Error("Testnet and multisig version bytes should be different")
+	}
+}
+
+func TestMetadataFields(t *testing.T) {
+	wallet, _ := NewWalletWithMetadata("Test Wallet", TruthChainMainnetVersion)
+
+	if wallet.Metadata == nil {
+		t.Fatal("Metadata is nil")
+	}
+
+	// Test metadata fields
+	if wallet.Metadata.Name != "Test Wallet" {
+		t.Errorf("Expected name 'Test Wallet', got '%s'", wallet.Metadata.Name)
+	}
+
+	if wallet.Metadata.Network != "mainnet" {
+		t.Errorf("Expected network 'mainnet', got '%s'", wallet.Metadata.Network)
+	}
+
+	if wallet.Metadata.VersionByte != TruthChainMainnetVersion {
+		t.Errorf("Expected version byte 0x%02X, got 0x%02X", TruthChainMainnetVersion, wallet.Metadata.VersionByte)
+	}
+
+	// Test that timestamps are recent
+	now := time.Now()
+	if wallet.Metadata.Created.After(now) {
+		t.Error("Created timestamp is in the future")
+	}
+	if wallet.Metadata.LastUsed.After(now) {
+		t.Error("LastUsed timestamp is in the future")
 	}
 }
