@@ -1,0 +1,117 @@
+# TruthChain: A Decentralized, Immutable Ledger of Historical Posts
+
+## Abstract
+
+TruthChain is a decentralized blockchain protocol designed to permanently record and preserve historical statements, posts, and texts. In a world where political figures, corporations, and media entities frequently erase or alter their past claims, TruthChain provides a censorship-resistant, tamper-proof mechanism for publishing and archiving information. It replaces traditional financial tokens with a finite, cryptographically-earned unit of information: the character.
+
+## 1. Purpose and Vision
+
+The goal of TruthChain is to create a globally distributed system where statements, news, or posts can be published and preserved forever, immune to modification or deletion. This supports a truthful public record and counteracts historical revisionism by preserving what was said, when it was said, by whom.
+
+## 2. Key Concepts
+
+### Characters as Currency
+
+- One "character" equals one UTF-8 text character stored on-chain
+- Characters are earned by keeping the network alive (i.e., running a node)
+- Characters can be sent between users or burned to post messages
+
+### Daily Character Cap
+
+- The network produces a maximum of 280,000 characters per day (approx. 1,000 Twitter-length posts)
+- Each node shares in this pool, with earnings decreasing as node count increases
+- Early adopters may earn ~1120 characters/day, encouraging bootstrapping
+
+### Posting and Transfer Mechanism
+
+- To post a message, a user burns characters equal to the post's length
+- Users may transfer characters to others using signed transactions
+- All actions are cryptographically signed using wallet keypairs
+
+## 3. Wallet and Identity
+
+### Wallets are Cryptographic Keypairs
+
+- Each user generates a public/private keypair
+- The public key serves as the user's identity
+- The private key is used to sign transactions and posts
+
+### Authentication
+
+- No usernames or passwords
+- CLI users manage key files or mnemonic seeds
+- Web users authenticate by uploading a wallet file, decrypting with a passphrase, or using a browser wallet extension (planned)
+
+## 4. Node Participation and Incentives
+
+### Mining by Uptime
+
+- Nodes are rewarded with characters based on uptime, not proof-of-work
+- Character issuance decreases logarithmically as node count grows
+
+#### Earnings Distribution
+
+Let C be the total daily cap (280,000 characters).
+
+Let N be the number of active nodes.
+
+A node's daily earnings are calculated using a logarithmic decay function to balance early adoption with long-term fairness.
+
+**Final Reward Table:**
+
+| Nodes Online (N) | Characters per Node/day | Total Characters Emitted |
+|------------------|-------------------------|--------------------------|
+| 1                | 1,120                   | 1,120                        |
+| 10               | 1,037                   | 10,370                       |
+| 100              | 800                     | 80,000                      |
+| 500              | 451                     | 225,500                     |
+| 1,000            | 280                     | 280,000 (hard cap hit)   |
+| 10,000           | ~27                     | 280,000                      |
+| 100,000          | ~2.7                    | 280,000                      |
+
+The network reaches full saturation (280,000/day) around 1,000 nodes.
+
+Beyond that, per-node reward decreases significantly, creating scarcity and value.
+
+### Incentive Model
+
+- Characters become scarcer and more valuable over time
+- Users must run a node or obtain characters from others to post
+
+## 5. Technical Architecture Overview
+
+### Core Components
+
+- **Wallet System**: key generation, signing, storage
+- **Transaction Pool**: verify, broadcast, confirm
+- **Ledger State**: character balances, post history
+- **Blockchain Engine**: block creation, chain validation
+- **P2P Network**: gossip, peer discovery
+- **Storage Layer**: full posts stored on-chain
+
+### Optional Enhancements
+
+- Compression
+- Pruned nodes (header-only)
+- IPFS/Arweave integration for snapshots (future)
+
+## 6. Scalability and Chain Size Considerations
+
+Daily cap ensures chain size grows at a predictable rate:
+
+- ~102 MB/year uncompressed (~280,000 chars/day)
+- ~1 GB/decade per node (compressed)
+- Enables fully decentralized storage without cloud reliance
+
+## 7. Roadmap
+
+- **Phase 1**: CLI tool for node, wallet, posting, and sync
+- **Phase 2**: Peer discovery and full P2P sync
+- **Phase 3**: Web interface for viewing, searching, posting
+- **Phase 4**: Optional browser extension wallet
+- **Phase 5**: Governance, tipping, reputation systems
+
+## Conclusion
+
+TruthChain is designed to become a permanent, decentralized archive of history — immune to censorship, manipulation, or loss. By replacing speculative tokens with informational value, it redefines what a blockchain can preserve: not just money, but memory.
+
