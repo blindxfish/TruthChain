@@ -69,11 +69,12 @@ Nodes earn characters based on uptime, not proof-of-work. Character issuance dec
 - ✅ Load or create wallet on node start
 - ✅ **Bonus**: Base58Check addresses, multi-network support, metadata
 
-### Milestone 2: Block & Post Logic 🔄 **IN PROGRESS**
-- ⏳ Define Post and Block structs
-- ⏳ Implement hash, sign, and verify methods
-- ⏳ Collect valid posts in memory
-- ⏳ Commit block when N characters are accumulated
+### Milestone 2: Block & Post Logic ✅ **COMPLETE**
+- ✅ Define Post and Block structs
+- ✅ Implement hash, sign, and verify methods
+- ✅ Collect valid posts in memory
+- ✅ Commit block when N characters are accumulated
+- ✅ **Secure signature verification with public key recovery**
 
 ### Milestone 3: Local Storage (BoltDB) ⏳ **PENDING**
 - ⏳ Save/load blocks
@@ -163,6 +164,7 @@ Daily cap ensures chain size grows at a predictable rate:
 ## 🛡️ Security Features
 
 - **Cryptographic Signing**: All posts and transfers signed with private keys
+- **Secure Signature Verification**: Public key recovery from compact ECDSA signatures ensures authorship validation
 - **Immutable Storage**: Once posted, content cannot be modified
 - **Censorship Resistance**: Distributed network prevents single points of failure
 - **Verifiable History**: Complete audit trail of all posts and transfers
@@ -229,11 +231,9 @@ Created: 2024-01-15 10:30:45
 Last Used: 2024-01-15 10:30:45
 ```
 
-### Future CLI Features
+### CLI Features
 
-As we progress through the implementation roadmap, the CLI will support:
-
-#### Milestone 2: Block & Post Logic
+#### Milestone 2: Block & Post Logic ✅ **AVAILABLE**
 ```bash
 # Post a message to the blockchain
 go run cmd/main.go --post "Hello, TruthChain!"
