@@ -63,44 +63,47 @@ Nodes earn characters based on uptime, not proof-of-work. Character issuance dec
 
 ## 🚀 Implementation Roadmap
 
-### Milestone 1: Init & Wallet ✅
-- Generate and save ECDSA wallet (secp256k1)
-- CLI: show wallet address (public key)
-- Load or create wallet on node start
+### Milestone 1: Init & Wallet ✅ **COMPLETE**
+- ✅ Generate and save ECDSA wallet (secp256k1)
+- ✅ CLI: show wallet address (public key)
+- ✅ Load or create wallet on node start
+- ✅ **Bonus**: Base58Check addresses, multi-network support, metadata
 
-### Milestone 2: Block & Post Logic ✅
-- Define Post and Block structs
-- Implement hash, sign, and verify methods
-- Collect valid posts in memory
-- Commit block when N characters are accumulated
+### Milestone 2: Block & Post Logic 🔄 **IN PROGRESS**
+- ⏳ Define Post and Block structs
+- ⏳ Implement hash, sign, and verify methods
+- ⏳ Collect valid posts in memory
+- ⏳ Commit block when N characters are accumulated
 
-### Milestone 3: Local Storage (BoltDB) ✅
-- Save/load blocks
-- Save posts by hash
-- Track current block index
-- Track total characters owned per user
+### Milestone 3: Local Storage (BoltDB) ⏳ **PENDING**
+- ⏳ Save/load blocks
+- ⏳ Save posts by hash
+- ⏳ Track current block index
+- ⏳ Track total characters owned per user
 
-### Milestone 4: Uptime Tracker ✅
-- Node logs uptime (heartbeats)
-- Every 24h: divide 280,000 characters among all active nodes
-- Reward characters to the wallet
+### Milestone 4: Uptime Tracker ⏳ **PENDING**
+- ⏳ Node logs uptime (heartbeats)
+- ⏳ Every 24h: divide 280,000 characters among all active nodes
+- ⏳ Reward characters to the wallet
 
-### Milestone 5: Local HTTP API ✅
-- Expose endpoints:
+### Milestone 5: Local HTTP API ⏳ **PENDING**
+- ⏳ Expose endpoints:
   - `GET /status` – node info
   - `GET /wallet` – address, char balance
   - `POST /post` – submit signed post
   - `GET /posts/latest` – recent posts
   - `POST /characters/send` – send characters
 
-### Milestone 6: Character Transfer ✅
-- Add signed transfer payload format
-- Update balances on both sides
+### Milestone 6: Character Transfer ⏳ **PENDING**
+- ⏳ Add signed transfer payload format
+- ⏳ Update balances on both sides
 
-### Milestone 7: Post Validator & Chain Sync ✅
-- Validate signature and balance for incoming posts
-- Store valid ones
-- Prepare later: sync posts/blocks with peers
+### Milestone 7: Post Validator & Chain Sync ⏳ **PENDING**
+- ⏳ Validate signature and balance for incoming posts
+- ⏳ Store valid ones
+- ⏳ Prepare later: sync posts/blocks with peers
+
+**Legend**: ✅ Complete | 🔄 In Progress | ⏳ Pending
 
 ## 📁 Project Structure
 
@@ -168,6 +171,97 @@ Daily cap ensures chain size grows at a predictable rate:
 
 - [System Description](SystemDescription.txt) - Technical implementation details
 - [White Paper](WhitePaper.txt) - Comprehensive project overview
+
+## 🖥️ CLI Usage
+
+### Wallet Management (Milestone 1 ✅)
+
+The TruthChain CLI provides comprehensive wallet management capabilities:
+
+#### Basic Wallet Operations
+```bash
+# Show wallet information
+go run cmd/main.go --show-wallet
+
+# Show detailed wallet information including metadata
+go run cmd/main.go --show-wallet --debug
+
+# Create a new mainnet wallet (default)
+go run cmd/main.go --wallet my-wallet.key
+
+# Create a named wallet
+go run cmd/main.go --wallet my-wallet.key --name "My TruthChain Wallet"
+```
+
+#### Multi-Network Support
+```bash
+# Create mainnet wallet (default)
+go run cmd/main.go --network mainnet --name "Mainnet Wallet"
+
+# Create testnet wallet for development/testing
+go run cmd/main.go --network testnet --name "Testnet Wallet"
+
+# Create multisig wallet (placeholder for future implementation)
+go run cmd/main.go --network multisig --name "Multisig Wallet"
+```
+
+#### Command Line Options
+| Flag | Description | Default |
+|------|-------------|---------|
+| `--wallet` | Path to wallet file | `wallet.key` |
+| `--show-wallet` | Show wallet address and exit | `false` |
+| `--debug` | Show additional wallet information | `false` |
+| `--network` | Network type: mainnet, testnet, multisig | `mainnet` |
+| `--name` | Wallet name for new wallets | `""` |
+
+#### Example Output
+```bash
+$ go run cmd/main.go --show-wallet --debug --network testnet --name "Test Wallet"
+Wallet Address: 1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa
+Wallet File: wallet.key
+Network: testnet
+Public Key (compressed): 02a1b2c3d4e5f6...
+Public Key (uncompressed): 04a1b2c3d4e5f6...
+Version Byte: 0x6F
+Address Valid: true
+Wallet Name: Test Wallet
+Created: 2024-01-15 10:30:45
+Last Used: 2024-01-15 10:30:45
+```
+
+### Future CLI Features
+
+As we progress through the implementation roadmap, the CLI will support:
+
+#### Milestone 2: Block & Post Logic
+```bash
+# Post a message to the blockchain
+go run cmd/main.go --post "Hello, TruthChain!"
+
+# View recent posts
+go run cmd/main.go --posts
+
+# View blockchain status
+go run cmd/main.go --status
+```
+
+#### Milestone 5: Local HTTP API
+```bash
+# Start the node with API server
+go run cmd/main.go --api-port 8080
+
+# View API documentation
+go run cmd/main.go --api-docs
+```
+
+#### Milestone 6: Character Transfer
+```bash
+# Send characters to another address
+go run cmd/main.go --send 1000 --to 1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa
+
+# Check character balance
+go run cmd/main.go --balance
+```
 
 ## 🤝 Contributing
 
