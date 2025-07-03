@@ -20,6 +20,8 @@ type Blockchain struct {
 	PendingPosts  []chain.Post        `json:"pending_posts"`
 	TransferPool  *chain.TransferPool `json:"transfer_pool"`
 	PostThreshold int                 `json:"post_threshold"` // Number of posts needed to create a block
+	TimeInterval  time.Duration       `json:"time_interval"`  // Time interval for block creation (10 minutes)
+	lastBlockTime time.Time           `json:"last_block_time"`
 	mu            sync.RWMutex        `json:"-"`
 }
 
@@ -36,6 +38,8 @@ func NewBlockchain(storage store.Storage, postThreshold int) (*Blockchain, error
 		PendingPosts:  []chain.Post{},
 		TransferPool:  chain.NewTransferPool(),
 		PostThreshold: postThreshold,
+		TimeInterval:  10 * time.Minute, // Create blocks every 10 minutes if no posts
+		lastBlockTime: time.Now(),
 	}
 
 	// Check if we need to create genesis block
@@ -73,6 +77,9 @@ func NewBlockchain(storage store.Storage, postThreshold int) (*Blockchain, error
 	if err := bc.initializeState(); err != nil {
 		return nil, fmt.Errorf("failed to initialize state: %w", err)
 	}
+
+	// Start background goroutine for time-based block creation
+	go bc.timeBasedBlockLoop()
 
 	return bc, nil
 }
@@ -194,9 +201,14 @@ func (bc *Blockchain) AddPost(post chain.Post) error {
 	// Add to pending posts
 	bc.PendingPosts = append(bc.PendingPosts, post)
 
-	// Check if we should create a new block based on post count
+	// Check if we should create a new block based on post count or time
 	if len(bc.PendingPosts) >= bc.PostThreshold {
 		return bc.createBlockFromPending()
+	}
+
+	// Check if we should create a block based on time interval
+	if bc.shouldCreateTimeBasedBlock() {
+		return bc.createTimeBasedBlock()
 	}
 
 	return nil
@@ -809,4 +821,61 @@ func (bc *Blockchain) IntegrateBlocksFromSync(blocks []*chain.Block) (int, int, 
 	}
 
 	return blocksAdded, blocksSkipped, nil
+}
+
+// shouldCreateTimeBasedBlock checks if we should create a block based on time interval
+func (bc *Blockchain) shouldCreateTimeBasedBlock() bool {
+	bc.mu.RLock()
+	defer bc.mu.RUnlock()
+
+	// Check if enough time has passed since the last block
+	return time.Since(bc.lastBlockTime) >= bc.TimeInterval
+}
+
+// createTimeBasedBlock creates a new block based on time interval (empty block for mining rewards)
+func (bc *Blockchain) createTimeBasedBlock() error {
+	bc.mu.Lock()
+	defer bc.mu.Unlock()
+
+	// Get the latest block
+	latestBlock, err := bc.storage.GetLatestBlock()
+	if err != nil {
+		return fmt.Errorf("failed to get latest block: %w", err)
+	}
+
+	// Create a new empty block for mining rewards
+	newBlock := &chain.Block{
+		Index:     latestBlock.Index + 1,
+		Timestamp: time.Now().Unix(),
+		PrevHash:  latestBlock.Hash,
+		Posts:     []chain.Post{},        // Empty block - no posts
+		Transfers: []chain.Transfer{},    // No transfers
+		StateRoot: latestBlock.StateRoot, // Keep same state root since no changes
+	}
+
+	// Calculate block hash
+	newBlock.CalculateHash()
+
+	// Save the block
+	if err := bc.storage.SaveBlock(newBlock); err != nil {
+		return fmt.Errorf("failed to save time-based block: %w", err)
+	}
+
+	// Update last block time
+	bc.lastBlockTime = time.Now()
+
+	fmt.Printf("Created time-based block %d (empty block for mining rewards)\n", newBlock.Index)
+	return nil
+}
+
+// timeBasedBlockLoop is a background goroutine to check for time-based blocks and create them
+func (bc *Blockchain) timeBasedBlockLoop() {
+	for {
+		if bc.shouldCreateTimeBasedBlock() {
+			if err := bc.createTimeBasedBlock(); err != nil {
+				fmt.Printf("Error creating time-based block: %v\n", err)
+			}
+		}
+		time.Sleep(1 * time.Minute) // Check every minute
+	}
 }
