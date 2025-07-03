@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"time"
 
+	"github.com/blindxfish/truthchain/api"
 	"github.com/blindxfish/truthchain/blockchain"
 	"github.com/blindxfish/truthchain/chain"
 	"github.com/blindxfish/truthchain/miner"
@@ -43,6 +44,7 @@ func main() {
 		forceBlock    = flag.Bool("force-block", false, "Force creation of a new block")
 		postThreshold = flag.Int("post-threshold", chain.MainnetMinPosts, "Number of posts needed for block creation")
 		monitor       = flag.Bool("monitor", false, "Show live node/network stats (like top)")
+		apiPort       = flag.Int("api-port", 0, "Start HTTP API server on port (0 = disabled)")
 	)
 	flag.Parse()
 
@@ -334,6 +336,32 @@ func main() {
 		}
 	}
 
+	// Start API server if requested
+	if *apiPort > 0 {
+		// Initialize uptime tracker
+		uptimeTracker := miner.NewUptimeTracker(w, storage)
+		uptimeTracker.LoadHeartbeats()
+
+		// Create and start API server
+		server := api.NewServer(blockchain, uptimeTracker, w, storage, *apiPort)
+
+		fmt.Printf("Starting TruthChain API server on port %d...\n", *apiPort)
+		fmt.Printf("API endpoints:\n")
+		fmt.Printf("  GET  http://127.0.0.1:%d/status\n", *apiPort)
+		fmt.Printf("  GET  http://127.0.0.1:%d/wallet\n", *apiPort)
+		fmt.Printf("  POST http://127.0.0.1:%d/post\n", *apiPort)
+		fmt.Printf("  GET  http://127.0.0.1:%d/posts/latest\n", *apiPort)
+		fmt.Printf("  POST http://127.0.0.1:%d/characters/send\n", *apiPort)
+		fmt.Printf("  GET  http://127.0.0.1:%d/uptime\n", *apiPort)
+		fmt.Printf("  GET  http://127.0.0.1:%d/balance\n", *apiPort)
+		fmt.Println()
+
+		if err := server.Start(); err != nil {
+			log.Fatalf("API server failed: %v", err)
+		}
+		return
+	}
+
 	// Normal node startup (no specific command)
 	fmt.Printf("TruthChain node starting...\n")
 	fmt.Printf("Wallet Address: %s\n", w.GetAddress())
@@ -359,7 +387,19 @@ func main() {
 	fmt.Printf("  Pending Posts: %v\n", info["pending_post_count"])
 	fmt.Printf("  Pending Characters: %v/%v\n", info["pending_character_count"], info["character_threshold"])
 
-	// TODO: Start other node components (API, miner, etc.)
-	fmt.Println("\nNode components not yet implemented - stopping.")
-	fmt.Println("Use --help to see available commands.")
+	// Show available features
+	fmt.Println("\nAvailable Features:")
+	fmt.Println("  ✅ Wallet Management")
+	fmt.Println("  ✅ Blockchain Operations")
+	fmt.Println("  ✅ Post Creation & Management")
+	fmt.Println("  ✅ Character Transfer System")
+	fmt.Println("  ✅ Uptime Mining & Rewards")
+	fmt.Println("  ✅ HTTP API Server")
+	fmt.Println("  ✅ Live Monitoring Dashboard")
+
+	fmt.Println("\nTo start the HTTP API server:")
+	fmt.Printf("  go run cmd/main.go --api-port 8080\n")
+	fmt.Println("\nTo view live node stats:")
+	fmt.Printf("  go run cmd/main.go --monitor\n")
+	fmt.Println("\nUse --help to see all available commands.")
 }

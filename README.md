@@ -84,18 +84,89 @@ Nodes earn characters based on uptime, not proof-of-work. Character issuance dec
 - ✅ Track pending posts in mempool with persistence
 - ✅ **Bonus**: Mempool discharge, post count thresholds, fork protection
 
-### Milestone 4: Uptime Tracker ⏳ **PENDING**
-- ⏳ Node logs uptime (heartbeats)
-- ⏳ Every 24h: divide 280,000 characters among all active nodes
-- ⏳ Reward characters to the wallet
+### Milestone 4: Uptime Tracker ✅ **COMPLETE**
+- ✅ Node logs uptime (heartbeats)
+- ✅ Every 10 minutes share the calculated amount of the characters among all active nodes based on the reward table.
+- ✅ Reward characters to the wallet
+- ✅ Live monitoring dashboard with `--monitor` flag
 
-### Milestone 5: Local HTTP API ⏳ **PENDING**
-- ⏳ Expose endpoints:
-  - `GET /status` – node info
-  - `GET /wallet` – address, char balance
-  - `POST /post` – submit signed post
-  - `GET /posts/latest` – recent posts
-  - `POST /characters/send` – send characters
+### Milestone 5: Local HTTP API ✅ **COMPLETE**
+```bash
+# Start the node with API server
+go run cmd/main.go --api-port 8080
+
+# The API server will be available at http://127.0.0.1:8080
+```
+
+**Available API Endpoints:**
+
+| Method | Endpoint | Description | Example |
+|--------|----------|-------------|---------|
+| `GET` | `/status` | Node and blockchain status | `curl http://127.0.0.1:8080/status` |
+| `GET` | `/wallet` | Wallet information and balance | `curl http://127.0.0.1:8080/wallet` |
+| `POST` | `/post` | Create and submit a new post | `curl -X POST -H "Content-Type: application/json" -d '{"content":"Hello TruthChain!"}' http://127.0.0.1:8080/post` |
+| `GET` | `/posts/latest` | Latest block and pending posts | `curl http://127.0.0.1:8080/posts/latest` |
+| `POST` | `/characters/send` | Send characters to another address | `curl -X POST -H "Content-Type: application/json" -d '{"to":"1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa","amount":100}' http://127.0.0.1:8080/characters/send` |
+| `GET` | `/uptime` | Uptime tracking and rewards info | `curl http://127.0.0.1:8080/uptime` |
+| `GET` | `/balance` | Current character balance | `curl http://127.0.0.1:8080/balance` |
+
+**Example API Usage:**
+```bash
+# Start API server
+go run cmd/main.go --api-port 8080
+
+# In another terminal, test the API
+curl http://127.0.0.1:8080/status
+curl http://127.0.0.1:8080/wallet
+
+# Create a post (requires sufficient character balance)
+curl -X POST -H "Content-Type: application/json" \
+  -d '{"content":"Hello, TruthChain! This is my first post."}' \
+  http://127.0.0.1:8080/post
+
+# Send characters to another address
+curl -X POST -H "Content-Type: application/json" \
+  -d '{"to":"1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa","amount":50}' \
+  http://127.0.0.1:8080/characters/send
+```
+
+**API Response Examples:**
+
+**GET /status**
+```json
+{
+  "node_info": {
+    "wallet_address": "1EAWe46tZvy1KGpcsU3sbJMcL7XmM7yrwT",
+    "network": "mainnet",
+    "uptime_24h": 95.5,
+    "uptime_total": 98.2,
+    "character_balance": 1250
+  },
+  "blockchain_info": {
+    "chain_length": 5,
+    "total_post_count": 23,
+    "total_character_count": 1250,
+    "pending_post_count": 2,
+    "pending_character_count": 45
+  },
+  "timestamp": 1751485627
+}
+```
+
+**POST /post**
+```json
+{
+  "success": true,
+  "post": {
+    "hash": "abc123...",
+    "author": "1EAWe46tZvy1KGpcsU3sbJMcL7XmM7yrwT",
+    "content": "Hello, TruthChain!",
+    "timestamp": 1751485627,
+    "characters": 17
+  },
+  "new_balance": 1233
+}
+```
 
 ### Milestone 6: Character Transfer ⏳ **PENDING**
 - ⏳ Add signed transfer payload format
@@ -261,15 +332,6 @@ go run cmd/main.go --force-block
 
 # Use custom post threshold (for testing)
 go run cmd/main.go --post-threshold 3 --post "Test post"
-```
-
-#### Milestone 5: Local HTTP API
-```bash
-# Start the node with API server
-go run cmd/main.go --api-port 8080
-
-# View API documentation
-go run cmd/main.go --api-docs
 ```
 
 #### Milestone 6: Character Transfer

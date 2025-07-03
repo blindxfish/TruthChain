@@ -5,13 +5,14 @@ import (
 	"os"
 	"testing"
 
+	"github.com/blindxfish/truthchain/chain"
 	"github.com/blindxfish/truthchain/store"
 	"github.com/blindxfish/truthchain/wallet"
 )
 
 func TestNewBlockchain(t *testing.T) {
 	// Create temporary database file
-	dbPath := "test_new_bc.db"
+	dbPath := "test_new_blockchain.db"
 	defer os.Remove(dbPath)
 
 	// Create storage
@@ -21,8 +22,8 @@ func TestNewBlockchain(t *testing.T) {
 	}
 	defer storage.Close()
 
-	// Create blockchain
-	bc, err := NewBlockchain(storage, 1000)
+	// Create blockchain with mainnet threshold
+	bc, err := NewBlockchain(storage, chain.MainnetMinPosts)
 	if err != nil {
 		t.Fatalf("Failed to create blockchain: %v", err)
 	}
@@ -55,8 +56,8 @@ func TestAddPost(t *testing.T) {
 	}
 	defer storage.Close()
 
-	// Create blockchain
-	bc, err := NewBlockchain(storage, 1000)
+	// Create blockchain with mainnet threshold
+	bc, err := NewBlockchain(storage, chain.MainnetMinPosts)
 	if err != nil {
 		t.Fatalf("Failed to create blockchain: %v", err)
 	}
@@ -106,8 +107,8 @@ func TestCreateBlockFromPending(t *testing.T) {
 	}
 	defer storage.Close()
 
-	// Create blockchain with low threshold
-	bc, err := NewBlockchain(storage, 50)
+	// Create blockchain with mainnet threshold
+	bc, err := NewBlockchain(storage, chain.MainnetMinPosts)
 	if err != nil {
 		t.Fatalf("Failed to create blockchain: %v", err)
 	}
@@ -118,8 +119,8 @@ func TestCreateBlockFromPending(t *testing.T) {
 		t.Fatalf("Failed to create wallet: %v", err)
 	}
 
-	// Create and add posts until block is created
-	for i := 0; i < 3; i++ {
+	// Create and add posts until block is created (need 5 posts for mainnet)
+	for i := 0; i < 5; i++ {
 		content := fmt.Sprintf("Test post %d with enough characters to trigger block creation", i)
 		post, err := bc.CreatePost(content, wallet)
 		if err != nil {
@@ -137,9 +138,9 @@ func TestCreateBlockFromPending(t *testing.T) {
 		t.Fatalf("Failed to get chain length: %v", err)
 	}
 
-	// Each post has enough characters to trigger block creation, so we expect multiple blocks
-	if chainLength < 2 { // At least genesis block + 1 new block
-		t.Errorf("Expected at least 2 blocks, got %d", chainLength)
+	// With 5 posts, we expect exactly 2 blocks (genesis + 1 new block)
+	if chainLength != 2 {
+		t.Errorf("Expected exactly 2 blocks, got %d", chainLength)
 	}
 
 	// Verify pending posts were cleared
@@ -161,8 +162,8 @@ func TestCharacterBalance(t *testing.T) {
 	}
 	defer storage.Close()
 
-	// Create blockchain
-	bc, err := NewBlockchain(storage, 1000)
+	// Create blockchain with mainnet threshold
+	bc, err := NewBlockchain(storage, chain.MainnetMinPosts)
 	if err != nil {
 		t.Fatalf("Failed to create blockchain: %v", err)
 	}
@@ -205,8 +206,8 @@ func TestValidateChain(t *testing.T) {
 	}
 	defer storage.Close()
 
-	// Create blockchain
-	bc, err := NewBlockchain(storage, 100)
+	// Create blockchain with mainnet threshold
+	bc, err := NewBlockchain(storage, chain.MainnetMinPosts)
 	if err != nil {
 		t.Fatalf("Failed to create blockchain: %v", err)
 	}
@@ -249,7 +250,7 @@ func TestGetBlockchainInfo(t *testing.T) {
 	defer storage.Close()
 
 	// Create blockchain
-	bc, err := NewBlockchain(storage, 100)
+	bc, err := NewBlockchain(storage, chain.MainnetMinPosts)
 	if err != nil {
 		t.Fatalf("Failed to create blockchain: %v", err)
 	}
@@ -267,7 +268,7 @@ func TestGetBlockchainInfo(t *testing.T) {
 		"total_post_count",
 		"pending_post_count",
 		"pending_character_count",
-		"character_threshold",
+		"post_threshold",
 		"latest_block_index",
 		"latest_block_hash",
 		"latest_block_timestamp",
@@ -302,7 +303,7 @@ func TestDuplicatePostRejection(t *testing.T) {
 	defer storage.Close()
 
 	// Create blockchain
-	bc, err := NewBlockchain(storage, 1000)
+	bc, err := NewBlockchain(storage, chain.MainnetMinPosts)
 	if err != nil {
 		t.Fatalf("Failed to create blockchain: %v", err)
 	}
