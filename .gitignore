@@ -1,0 +1,35 @@
+# Build artifacts
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+truthchain
+truthchain.exe
+
+# Database files
+*.db
+*.db-journal
+truthchain.db
+
+# Personal configuration
+bootstrap.json
+wallet.json
+*.key
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+
+# Temporary files
+*.tmp
+*.temp 

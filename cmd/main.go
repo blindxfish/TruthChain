@@ -212,7 +212,8 @@ func (n *TruthChainNode) initializeMesh() error {
 	if n.trustNetwork == nil {
 		return fmt.Errorf("trust network not initialized")
 	}
-	return n.trustNetwork.Start()
+	// TrustNetwork will be started in the Start() method, not here
+	return nil
 }
 
 // initializeBeacon sets up the beacon manager
@@ -286,6 +287,7 @@ func (n *TruthChainNode) setupAPIRoutes() {
 	n.router.HandleFunc("/wallets", n.handleGetWallets).Methods("GET")
 	n.router.HandleFunc("/wallets/{address}", n.handleGetWallet).Methods("GET")
 	n.router.HandleFunc("/wallets/{address}/balance", n.handleGetBalance).Methods("GET")
+	n.router.HandleFunc("/wallets/{address}/backup", n.handleWalletBackup).Methods("GET")
 
 	// Network endpoints
 	n.router.HandleFunc("/network/stats", n.handleNetworkStats).Methods("GET")
@@ -561,6 +563,31 @@ func (n *TruthChainNode) handleGetBalance(w http.ResponseWriter, r *http.Request
 	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(response)
+}
+
+func (n *TruthChainNode) handleWalletBackup(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	address := vars["address"]
+
+	// Only allow backup of the node's own wallet
+	if address != n.wallet.GetAddress() {
+		http.Error(w, "Unauthorized: can only backup own wallet", http.StatusForbidden)
+		return
+	}
+
+	// Create wallet backup
+	backup, err := n.wallet.ExportBackup()
+	if err != nil {
+		http.Error(w, fmt.Sprintf("Failed to create wallet backup: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	// Set filename for download
+	filename := fmt.Sprintf("truthchain-wallet-backup-%s.json", address[:8])
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=\"%s\"", filename))
+
+	json.NewEncoder(w).Encode(backup)
 }
 
 func (n *TruthChainNode) handleNetworkStats(w http.ResponseWriter, r *http.Request) {
