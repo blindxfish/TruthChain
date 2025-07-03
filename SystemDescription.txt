@@ -1,10 +1,3 @@
-You said:
-Please give me a new implementation plan and a clear system description again.
-
-
-ChatGPT said:
-Absolutely — here is your refined implementation plan and a clear system description based on your updated TruthChain vision.
-
 🧭 TruthChain System Overview
 TruthChain is a decentralized blockchain that permanently stores user-submitted text posts. Instead of financial tokens, the network uses characters as a resource — each post costs characters to write.
 

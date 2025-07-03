@@ -6,6 +6,7 @@ import (
 	"log"
 	"os"
 	"os/exec"
+	"strconv"
 	"strings"
 	"time"
 
@@ -70,12 +71,91 @@ func main() {
 		meshMode   = flag.Bool("mesh", false, "Enable mesh network mode for decentralized sync")
 		meshPort   = flag.Int("mesh-port", 9877, "Mesh network port (default: 9877)")
 
+		// Bootstrap flags
+		showBootstrap   = flag.Bool("show-bootstrap", false, "Show bootstrap nodes")
+		addBootstrap    = flag.String("add-bootstrap", "", "Add bootstrap node (format: address,description,region,is_beacon,trust_score)")
+		removeBootstrap = flag.String("remove-bootstrap", "", "Remove bootstrap node by address")
+		bootstrapConfig = flag.String("bootstrap-config", "bootstrap.json", "Bootstrap configuration file")
+
 		// Wallet backup and restore flags
 		backupWallet   = flag.String("backup", "", "Create wallet backup to file path")
 		restoreWallet  = flag.String("restore", "", "Restore wallet from backup file path")
 		validateBackup = flag.String("validate-backup", "", "Validate backup file without restoring")
 	)
 	flag.Parse()
+
+	// Handle bootstrap commands (before any other initialization)
+	if *showBootstrap {
+		fmt.Printf("TruthChain Bootstrap Nodes:\n")
+		fmt.Printf("Config file: %s\n\n", *bootstrapConfig)
+
+		bootstrapManager := network.NewBootstrapManager(*bootstrapConfig)
+		nodes := bootstrapManager.GetNodes()
+
+		if len(nodes) == 0 {
+			fmt.Printf("No bootstrap nodes configured.\n")
+		} else {
+			for i, node := range nodes {
+				fmt.Printf("Node %d:\n", i+1)
+				fmt.Printf("  Address: %s\n", node.Address)
+				fmt.Printf("  Description: %s\n", node.Description)
+				fmt.Printf("  Region: %s\n", node.Region)
+				fmt.Printf("  Type: %s\n", map[bool]string{true: "Beacon", false: "Mesh"}[node.IsBeacon])
+				fmt.Printf("  Trust Score: %.2f\n", node.TrustScore)
+				if node.LastSeen > 0 {
+					fmt.Printf("  Last Seen: %s\n", time.Unix(node.LastSeen, 0).Format("2006-01-02 15:04:05"))
+				} else {
+					fmt.Printf("  Last Seen: Never\n")
+				}
+				fmt.Println()
+			}
+		}
+		return
+	}
+
+	if *addBootstrap != "" {
+		// Parse bootstrap node parameters
+		parts := strings.Split(*addBootstrap, ",")
+		if len(parts) != 5 {
+			log.Fatalf("Invalid bootstrap node format. Use: address,description,region,is_beacon,trust_score")
+		}
+
+		address := strings.TrimSpace(parts[0])
+		description := strings.TrimSpace(parts[1])
+		region := strings.TrimSpace(parts[2])
+		isBeaconStr := strings.TrimSpace(parts[3])
+		trustScoreStr := strings.TrimSpace(parts[4])
+
+		isBeacon := isBeaconStr == "true" || isBeaconStr == "1"
+		trustScore, err := strconv.ParseFloat(trustScoreStr, 64)
+		if err != nil {
+			log.Fatalf("Invalid trust score: %s", trustScoreStr)
+		}
+
+		bootstrapManager := network.NewBootstrapManager(*bootstrapConfig)
+		if err := bootstrapManager.AddNode(address, description, region, isBeacon, trustScore); err != nil {
+			log.Fatalf("Failed to add bootstrap node: %v", err)
+		}
+
+		fmt.Printf("✅ Bootstrap node added successfully!\n")
+		fmt.Printf("Address: %s\n", address)
+		fmt.Printf("Description: %s\n", description)
+		fmt.Printf("Region: %s\n", region)
+		fmt.Printf("Type: %s\n", map[bool]string{true: "Beacon", false: "Mesh"}[isBeacon])
+		fmt.Printf("Trust Score: %.2f\n", trustScore)
+		return
+	}
+
+	if *removeBootstrap != "" {
+		bootstrapManager := network.NewBootstrapManager(*bootstrapConfig)
+		if err := bootstrapManager.RemoveNode(*removeBootstrap); err != nil {
+			log.Fatalf("Failed to remove bootstrap node: %v", err)
+		}
+
+		fmt.Printf("✅ Bootstrap node removed successfully!\n")
+		fmt.Printf("Address: %s\n", *removeBootstrap)
+		return
+	}
 
 	// Load or create wallet
 	var w *wallet.Wallet
@@ -674,7 +754,7 @@ func main() {
 		uptimeTracker := miner.NewUptimeTracker(w, storage, beaconManager)
 		uptimeTracker.LoadHeartbeats()
 
-		// Create trust network
+		// Create trust network with bootstrap
 		trustNetwork := network.NewTrustNetwork(
 			w.GetAddress(),
 			w,
@@ -682,6 +762,7 @@ func main() {
 			uptimeTracker,
 			blockchain,
 			*meshPort,
+			*bootstrapConfig, // Bootstrap config file
 		)
 
 		// Start trust network

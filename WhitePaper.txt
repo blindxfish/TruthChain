@@ -80,6 +80,12 @@ The network reaches full saturation (280,000/day) around 1,000 nodes.
 
 Beyond that, per-node reward decreases significantly, creating scarcity and value.
 
+### Beacon Node Incentives
+
+- Beacon nodes receive +50% character reward for acting as public entry points
+- Beacon nodes increase network stability and discoverability
+- Beacon announcements are minted into blocks for permanent record
+
 ### Incentive Model
 
 - Characters become scarcer and more valuable over time
@@ -95,8 +101,32 @@ Beyond that, per-node reward decreases significantly, creating scarcity and valu
 - **Transaction Pool**: verify, broadcast, confirm
 - **Ledger State**: character balances, post history
 - **Blockchain Engine**: block creation, chain validation
-- **P2P Network**: gossip, peer discovery
+- **P2P Network**: mesh network with gossip protocol
+- **Beacon System**: public discoverability and entry points
 - **Storage Layer**: full posts stored on-chain
+- **HTTP API**: RESTful interface for node operations
+
+### Network Architecture
+
+#### Mesh Network
+- Decentralized P2P mesh topology
+- Trust-based peer scoring and selection
+- Hop-based logical diversity for network resilience
+- Gossip protocol for peer discovery and message propagation
+- Anti-spam measures and rate limiting
+
+#### Beacon System
+- Public discoverability for new nodes
+- Signed beacon announcements minted into blocks
+- 12-hour rate limiting to prevent spam
+- Reachability tracking and trust scoring
+- Incentivized with +50% character rewards
+
+#### Chain Synchronization
+- TCP-based sync protocol for block exchange
+- Efficient block range requests
+- Duplicate prevention and validation
+- Mesh-integrated propagation
 
 ### Optional Enhancements
 
@@ -104,7 +134,45 @@ Beyond that, per-node reward decreases significantly, creating scarcity and valu
 - Pruned nodes (header-only)
 - IPFS/Arweave integration for snapshots (future)
 
-## 6. Scalability and Chain Size Considerations
+## 6. Character Transfer System
+
+### Signed Transfers
+- ECDSA-signed character transfers between addresses
+- Nonce-based replay protection
+- Hash-based integrity verification
+- Gas fee of 1 character per transfer
+
+### Transfer Pool
+- Mempool for pending transfers
+- Validation against current state
+- Balance and nonce verification
+- Automatic processing into blocks
+
+### Transfer Validation
+- Signature verification using public key recovery
+- Address validation and format checking
+- Sufficient balance verification
+- Nonce ordering enforcement
+
+## 7. HTTP API Interface
+
+### RESTful Endpoints
+- **GET /status**: Node and blockchain status
+- **GET /wallet**: Wallet information and balance
+- **GET /wallet/backup**: Download complete wallet backup
+- **POST /post**: Create and submit a new post
+- **GET /posts/latest**: Latest block and pending posts
+- **POST /characters/send**: Send characters to another address
+- **GET /uptime**: Uptime tracking and rewards info
+- **GET /balance**: Current character balance
+
+### API Features
+- JSON request/response format
+- Proper error handling and status codes
+- Secure wallet backup download
+- Balance validation and transaction processing
+
+## 8. Scalability and Chain Size Considerations
 
 Daily cap ensures chain size grows at a predictable rate:
 
@@ -113,15 +181,54 @@ Daily cap ensures chain size grows at a predictable rate:
 - Enables fully decentralized storage without cloud reliance
 - Transaction fees provide additional deflationary pressure beyond the daily cap
 
-## 7. Roadmap
+## 9. Network Security and Anti-Spam
 
-- **Phase 1**: CLI tool for node, wallet, posting, and sync
-- **Phase 2**: Peer discovery and full P2P sync
+### Trust-Based Security
+- Peer trust scoring based on uptime and behavior
+- Connection limits and rate limiting
+- Invalid data penalty and blacklisting
+- Mesh topology resilience against regional failures
+
+### Anti-Spam Measures
+- Character cost for posting (1 char per character)
+- Transfer gas fees (1 character per transfer)
+- Beacon announcement rate limiting (12-hour intervals)
+- Trust score requirements for network participation
+
+## 10. Roadmap
+
+- **Phase 1**: CLI tool for node, wallet, posting, and sync ✅ **COMPLETE**
+- **Phase 2**: Peer discovery and full P2P sync ✅ **COMPLETE**
 - **Phase 3**: Web interface for viewing, searching, posting
 - **Phase 4**: Optional browser extension wallet
 - **Phase 5**: Governance, tipping, reputation systems
 
+### Current Implementation Status
+
+#### ✅ Completed Features
+- **Wallet System**: ECDSA keypairs, address generation, signing
+- **Blockchain Engine**: Block creation, validation, storage
+- **Post System**: Signed posts, mempool, threshold-based block creation
+- **Character Transfer System**: Signed transfers, validation, transfer pool
+- **Uptime Mining**: Character rewards based on node uptime
+- **HTTP API**: Complete REST API for all operations
+- **Mesh Network**: P2P mesh with gossip protocol and trust scoring
+- **Beacon System**: Public discoverability with incentives
+- **Chain Synchronization**: TCP-based block sync protocol
+- **Network Transport**: Complete TCP transport layer with mesh integration
+- **Storage Layer**: BoltDB persistence with full state management
+
+#### 🔄 In Progress
+- **Web Interface**: Browser-based user interface
+
+#### 📋 Planned
+- **Browser Extension**: Wallet integration for web browsers
+- **Governance System**: On-chain governance and voting
+- **Reputation System**: Advanced trust and reputation mechanisms
+
 ## Conclusion
 
 TruthChain is designed to become a permanent, decentralized archive of history — immune to censorship, manipulation, or loss. By replacing speculative tokens with informational value, it redefines what a blockchain can preserve: not just money, but memory.
+
+The current implementation provides a fully functional decentralized network with mesh topology, beacon discoverability, character transfers, and comprehensive API access. The system is ready for real-world deployment and can scale to support a global network of truth-preserving nodes.
 

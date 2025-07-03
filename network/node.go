@@ -23,11 +23,12 @@ type TrustNetwork struct {
 	Blockchain    *blockchain.Blockchain
 
 	// Network components
-	TrustEngine   *TrustEngine
-	Topology      *NetworkTopology
-	MessageRouter *MessageRouter
-	PeerTable     *PeerTable   // Mesh management
-	MeshManager   *MeshManager // Mesh connection management
+	TrustEngine      *TrustEngine
+	Topology         *NetworkTopology
+	MessageRouter    *MessageRouter
+	PeerTable        *PeerTable        // Mesh management
+	MeshManager      *MeshManager      // Mesh connection management
+	BootstrapManager *BootstrapManager // Bootstrap node management
 
 	// Configuration
 	ListenPort    int
@@ -97,6 +98,7 @@ func NewTrustNetwork(
 	uptimeTracker *miner.UptimeTracker,
 	blockchain *blockchain.Blockchain,
 	listenPort int,
+	bootstrapConfig string,
 ) *TrustNetwork {
 
 	network := &TrustNetwork{
@@ -106,11 +108,12 @@ func NewTrustNetwork(
 		UptimeTracker: uptimeTracker,
 		Blockchain:    blockchain,
 
-		TrustEngine:   NewTrustEngine(),
-		Topology:      NewNetworkTopology(nodeID),
-		MessageRouter: NewMessageRouter(),
-		PeerTable:     NewPeerTable(32), // Default max 32 mesh peers
-		MeshManager:   nil,              // Will be initialized after network is created
+		TrustEngine:      NewTrustEngine(),
+		Topology:         NewNetworkTopology(nodeID),
+		MessageRouter:    NewMessageRouter(),
+		PeerTable:        NewPeerTable(32), // Default max 32 mesh peers
+		MeshManager:      nil,              // Will be initialized after network is created
+		BootstrapManager: NewBootstrapManager(bootstrapConfig),
 
 		ListenPort:    listenPort,
 		MaxPeers:      10,  // Default max 10 direct peers
@@ -158,6 +161,11 @@ func (tn *TrustNetwork) Start() error {
 	go tn.trustUpdater()
 	go tn.meshListener() // Listen for inbound mesh connections
 	go tn.cleanupMsgHashCache()
+
+	// Perform bootstrap if we have bootstrap nodes
+	if len(tn.BootstrapManager.GetNodes()) > 0 {
+		go tn.performBootstrap()
+	}
 
 	log.Printf("TrustNetwork started on port %d", tn.ListenPort)
 	return nil
@@ -613,6 +621,21 @@ func (tn *TrustNetwork) meshListener() {
 			remoteAddr := conn.RemoteAddr().String()
 			go tn.MeshManager.AcceptInboundConnection(conn, remoteAddr)
 		}
+	}
+}
+
+// performBootstrap attempts to connect to bootstrap nodes
+func (tn *TrustNetwork) performBootstrap() {
+	// Wait a bit for the network to start up
+	time.Sleep(2 * time.Second)
+
+	log.Printf("Starting bootstrap process...")
+
+	// Attempt to bootstrap with up to 5 nodes
+	if err := tn.BootstrapManager.Bootstrap(tn, 5); err != nil {
+		log.Printf("Bootstrap failed: %v", err)
+	} else {
+		log.Printf("Bootstrap completed successfully")
 	}
 }
 

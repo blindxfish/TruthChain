@@ -1,0 +1,66 @@
+[
+  {
+    "address": "mainnet.truthchain.org:9876",
+    "description": "Official TruthChain Mainnet Node",
+    "region": "Global",
+    "is_beacon": true,
+    "trust_score": 0.9,
+    "last_seen": 0
+  },
+  {
+    "address": "beacon1.truthchain.org:9876",
+    "description": "TruthChain Beacon Node 1",
+    "region": "North America",
+    "is_beacon": true,
+    "trust_score": 0.8,
+    "last_seen": 0
+  },
+  {
+    "address": "beacon2.truthchain.org:9876",
+    "description": "TruthChain Beacon Node 2",
+    "region": "Europe",
+    "is_beacon": true,
+    "trust_score": 0.8,
+    "last_seen": 0
+  },
+  {
+    "address": "beacon3.truthchain.org:9876",
+    "description": "TruthChain Beacon Node 3",
+    "region": "Asia",
+    "is_beacon": true,
+    "trust_score": 0.8,
+    "last_seen": 0
+  },
+  {
+    "address": "node1.truthchain.org:9876",
+    "description": "TruthChain Mesh Node 1",
+    "region": "North America",
+    "is_beacon": false,
+    "trust_score": 0.7,
+    "last_seen": 0
+  },
+  {
+    "address": "node2.truthchain.org:9876",
+    "description": "TruthChain Mesh Node 2",
+    "region": "Europe",
+    "is_beacon": false,
+    "trust_score": 0.7,
+    "last_seen": 0
+  },
+  {
+    "address": "node3.truthchain.org:9876",
+    "description": "TruthChain Mesh Node 3",
+    "region": "Asia",
+    "is_beacon": false,
+    "trust_score": 0.7,
+    "last_seen": 0
+  },
+  {
+    "address": "192.168.1.100:9876",
+    "description": "My Local Node",
+    "region": "Local Network",
+    "is_beacon": false,
+    "trust_score": 0.8,
+    "last_seen": 1751550695
+  }
+]
