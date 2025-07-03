@@ -35,14 +35,49 @@ type StateRoot struct {
 
 // Block represents a block in the TruthChain blockchain
 type Block struct {
-	Index     int        `json:"index"`      // block index
-	Timestamp int64      `json:"timestamp"`  // Unix timestamp
-	PrevHash  string     `json:"prev_hash"`  // hash of previous block
-	Hash      string     `json:"hash"`       // hash of this block
-	Posts     []Post     `json:"posts"`      // posts in this block
-	Transfers []Transfer `json:"transfers"`  // transfers in this block
-	StateRoot *StateRoot `json:"state_root"` // global state root
-	CharCount int        `json:"char_count"` // total characters in this block
+	Index          int             `json:"index"`                     // block index
+	Timestamp      int64           `json:"timestamp"`                 // Unix timestamp
+	PrevHash       string          `json:"prev_hash"`                 // hash of previous block
+	Hash           string          `json:"hash"`                      // hash of this block
+	Posts          []Post          `json:"posts"`                     // posts in this block
+	Transfers      []Transfer      `json:"transfers"`                 // transfers in this block
+	StateRoot      *StateRoot      `json:"state_root"`                // global state root
+	CharCount      int             `json:"char_count"`                // total characters in this block
+	BeaconAnnounce *BeaconAnnounce `json:"beacon_announce,omitempty"` // Optional beacon announcement
+}
+
+// BeaconAnnounce represents a beacon node announcement stored in a block
+type BeaconAnnounce struct {
+	NodeID    string  `json:"node_id"`   // Public key of the node
+	IP        string  `json:"ip"`        // Domain or IP (IPv4/IPv6)
+	Port      int     `json:"port"`      // Listening port
+	Timestamp int64   `json:"timestamp"` // UNIX time of declaration
+	Uptime    float64 `json:"uptime"`    // Reported uptime %
+	Version   string  `json:"version"`   // Optional node version string
+	Sig       string  `json:"sig"`       // Signature of payload with node's private key
+}
+
+// ValidateBeaconAnnounce validates a beacon announcement
+func (ba *BeaconAnnounce) ValidateBeaconAnnounce() error {
+	if ba.NodeID == "" {
+		return fmt.Errorf("beacon node ID cannot be empty")
+	}
+	if ba.IP == "" {
+		return fmt.Errorf("beacon IP cannot be empty")
+	}
+	if ba.Port < 1 || ba.Port > 65535 {
+		return fmt.Errorf("beacon port must be between 1 and 65535")
+	}
+	if ba.Timestamp <= 0 {
+		return fmt.Errorf("beacon timestamp must be positive")
+	}
+	if ba.Uptime < 0 || ba.Uptime > 100 {
+		return fmt.Errorf("beacon uptime must be between 0 and 100")
+	}
+	if ba.Sig == "" {
+		return fmt.Errorf("beacon signature cannot be empty")
+	}
+	return nil
 }
 
 // PostRequest represents a request to create a new post
@@ -60,6 +95,37 @@ type BlockHeader struct {
 	Hash      string `json:"hash"`
 	CharCount int    `json:"char_count"`
 	PostCount int    `json:"post_count"`
+}
+
+// ChainSyncRequest represents a request to sync blocks from a peer
+type ChainSyncRequest struct {
+	FromIndex int    `json:"from_index"` // Start block index
+	ToIndex   int    `json:"to_index"`   // End block index (optional, -1 for latest)
+	NodeID    string `json:"node_id"`    // Requesting node's ID
+	Timestamp int64  `json:"timestamp"`  // Request timestamp
+}
+
+// ChainSyncResponse represents a response to a chain sync request
+type ChainSyncResponse struct {
+	Blocks    []*Block `json:"blocks"`     // Requested blocks
+	FromIndex int      `json:"from_index"` // Actual start index
+	ToIndex   int      `json:"to_index"`   // Actual end index
+	NodeID    string   `json:"node_id"`    // Responding node's ID
+	Timestamp int64    `json:"timestamp"`  // Response timestamp
+}
+
+// BeaconDiscoveryRequest represents a request to discover beacon nodes
+type BeaconDiscoveryRequest struct {
+	NodeID     string `json:"node_id"`     // Requesting node's ID
+	Timestamp  int64  `json:"timestamp"`   // Request timestamp
+	MaxBeacons int    `json:"max_beacons"` // Maximum number of beacons to return
+}
+
+// BeaconDiscoveryResponse represents a response with discovered beacon nodes
+type BeaconDiscoveryResponse struct {
+	Beacons   []*BeaconAnnounce `json:"beacons"`   // Discovered beacon nodes
+	NodeID    string            `json:"node_id"`   // Responding node's ID
+	Timestamp int64             `json:"timestamp"` // Response timestamp
 }
 
 // CalculateHash calculates the hash of a post
@@ -171,6 +237,18 @@ func (b *Block) CalculateHash() string {
 		data += b.StateRoot.Hash
 	}
 
+	// Include beacon announcement hash if present
+	if b.BeaconAnnounce != nil {
+		beaconData := fmt.Sprintf("%s%s%d%f%s",
+			b.BeaconAnnounce.NodeID,
+			b.BeaconAnnounce.IP,
+			b.BeaconAnnounce.Port,
+			b.BeaconAnnounce.Uptime,
+			b.BeaconAnnounce.Version)
+		beaconHash := sha256.Sum256([]byte(beaconData))
+		data += hex.EncodeToString(beaconHash[:])
+	}
+
 	hash := sha256.Sum256([]byte(data))
 	return hex.EncodeToString(hash[:])
 }
@@ -219,6 +297,13 @@ func (b *Block) ValidateBlock() error {
 		calculatedHash := b.StateRoot.CalculateHash()
 		if b.StateRoot.Hash != calculatedHash {
 			return fmt.Errorf("state root hash mismatch: expected %s, got %s", calculatedHash, b.StateRoot.Hash)
+		}
+	}
+
+	// Validate beacon announcement if present
+	if b.BeaconAnnounce != nil {
+		if err := b.BeaconAnnounce.ValidateBeaconAnnounce(); err != nil {
+			return fmt.Errorf("invalid beacon announcement: %w", err)
 		}
 	}
 
@@ -385,5 +470,16 @@ func CreateBlock(index int, prevHash string, posts []Post, transfers []Transfer,
 	}
 
 	block.SetHash()
+	return block
+}
+
+// CreateBlockWithBeacon creates a new block with an optional beacon announcement
+func CreateBlockWithBeacon(index int, prevHash string, posts []Post, transfers []Transfer, stateRoot *StateRoot, beaconAnnounce *BeaconAnnounce) *Block {
+	block := CreateBlock(index, prevHash, posts, transfers, stateRoot)
+	block.BeaconAnnounce = beaconAnnounce
+
+	// Recalculate hash to include beacon announcement
+	block.SetHash()
+
 	return block
 }

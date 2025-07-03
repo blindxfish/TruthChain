@@ -210,10 +210,14 @@ curl -X POST -H "Content-Type: application/json" \
 - ✅ **Gas fee system** (1 character per transfer)
 - ✅ **Nonce tracking** for replay protection
 
-### Milestone 7: Post Validator & Chain Sync ⏳ **PENDING**
-- ⏳ Validate signature and balance for incoming posts
-- ⏳ Store valid ones
-- ⏳ Prepare later: sync posts/blocks with peers
+### Milestone 7: Post Validator & Chain Sync 🔄 **IN PROGRESS**
+- ✅ **Beacon Node System** - nodes can announce themselves in blocks with signed announcements
+- ✅ **Chain Sync Protocol** - request/response structures for block synchronization
+- ✅ **Beacon Discovery** - scan blockchain for peer addresses and announcements
+- ✅ **TCP Transport Layer** - server/client implementation for decentralized block sync
+- ✅ **Peer Management** - trust scoring, reachability tracking, and peer cleanup
+- ⏳ **Integration** - connect transport to main node startup flow
+- ⏳ **Bootstrap Nodes** - hardcoded list for initial network discovery
 
 **Legend**: ✅ Complete | 🔄 In Progress | ⏳ Pending
 

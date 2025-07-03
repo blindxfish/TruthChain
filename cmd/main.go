@@ -13,6 +13,7 @@ import (
 	"github.com/blindxfish/truthchain/blockchain"
 	"github.com/blindxfish/truthchain/chain"
 	"github.com/blindxfish/truthchain/miner"
+	"github.com/blindxfish/truthchain/network"
 	"github.com/blindxfish/truthchain/store"
 	"github.com/blindxfish/truthchain/wallet"
 )
@@ -26,14 +27,20 @@ func clearScreen() {
 	_ = cmd.Run()
 }
 
+// getLocalIP returns the local IP address for network binding
+func getLocalIP() string {
+	// For now, return localhost - in production this would detect the actual IP
+	return "127.0.0.1"
+}
+
 func main() {
 	// Define command line flags
 	var (
-		walletPath = flag.String("wallet", "wallet.key", "Path to wallet file")
-		showWallet = flag.Bool("show-wallet", false, "Show wallet address and exit")
-		debug      = flag.Bool("debug", false, "Show additional wallet information")
-		network    = flag.String("network", "mainnet", "Network type: mainnet, testnet, multisig")
-		walletName = flag.String("name", "", "Wallet name for new wallets")
+		walletPath  = flag.String("wallet", "wallet.key", "Path to wallet file")
+		showWallet  = flag.Bool("show-wallet", false, "Show wallet address and exit")
+		debug       = flag.Bool("debug", false, "Show additional wallet information")
+		networkType = flag.String("network", "mainnet", "Network type: mainnet, testnet, multisig")
+		walletName  = flag.String("name", "", "Wallet name for new wallets")
 
 		// Storage and blockchain commands
 		dbPath           = flag.String("db", "truthchain.db", "Path to database file")
@@ -53,6 +60,13 @@ func main() {
 		showState        = flag.Bool("show-state", false, "Show current blockchain state")
 		showWallets      = flag.Bool("show-wallets", false, "Show all wallet states")
 		addBalance       = flag.Int("add-balance", 0, "Add balance to current wallet (for testing)")
+
+		// Network and sync flags
+		syncPort   = flag.Int("sync-port", 0, "Start sync server on port (0 = disabled)")
+		syncFrom   = flag.String("sync-from", "", "Sync blocks from peer address (e.g., 192.168.1.100:9876)")
+		beaconMode = flag.Bool("beacon", false, "Enable beacon mode for peer discovery")
+		beaconIP   = flag.String("beacon-ip", "", "Beacon IP address (required with --beacon)")
+		beaconPort = flag.Int("beacon-port", 9876, "Beacon port (default: 9876)")
 	)
 	flag.Parse()
 
@@ -68,7 +82,7 @@ func main() {
 		}
 	} else {
 		// Create new wallet based on network type
-		switch *network {
+		switch *networkType {
 		case "mainnet":
 			w, err = wallet.NewWalletWithMetadata(*walletName, wallet.TruthChainMainnetVersion)
 		case "testnet":
@@ -76,7 +90,7 @@ func main() {
 		case "multisig":
 			w, err = wallet.NewMultisigWallet(*walletName)
 		default:
-			log.Fatalf("Invalid network type: %s. Use mainnet, testnet, or multisig", *network)
+			log.Fatalf("Invalid network type: %s. Use mainnet, testnet, or multisig", *networkType)
 		}
 
 		if err != nil {
@@ -501,6 +515,62 @@ func main() {
 			log.Fatalf("API server failed: %v", err)
 		}
 		return
+	}
+
+	// Handle sync operations
+	if *syncFrom != "" {
+		fmt.Printf("Syncing blocks from peer: %s\n", *syncFrom)
+
+		// Get current chain length
+		currentLength, err := blockchain.GetChainLength()
+		if err != nil {
+			log.Fatalf("Failed to get chain length: %v", err)
+		}
+
+		// Request blocks from current length onwards
+		resp, err := network.SyncFromPeerTCP(*syncFrom, currentLength, -1, w.GetAddress())
+		if err != nil {
+			log.Fatalf("Failed to sync from peer: %v", err)
+		}
+
+		fmt.Printf("Received %d blocks from peer\n", len(resp.Blocks))
+		fmt.Printf("Blocks range: %d to %d\n", resp.FromIndex, resp.ToIndex)
+
+		// TODO: Validate and integrate received blocks
+		// For now, just show what we received
+		for _, block := range resp.Blocks {
+			fmt.Printf("  Block %d: %d posts, %d characters\n",
+				block.Index, len(block.Posts), block.CharCount)
+		}
+		return
+	}
+
+	// Start sync server if requested
+	if *syncPort > 0 {
+		fmt.Printf("Starting sync server on port %d...\n", *syncPort)
+		fmt.Printf("Other nodes can sync from: %s:%d\n",
+			getLocalIP(), *syncPort)
+
+		// Start sync server in background
+		go func() {
+			if err := network.StartSyncServer(fmt.Sprintf(":%d", *syncPort), blockchain, w.GetAddress()); err != nil {
+				log.Printf("Sync server failed: %v", err)
+			}
+		}()
+	}
+
+	// Handle beacon mode
+	if *beaconMode {
+		if *beaconIP == "" {
+			log.Fatalf("Beacon IP address required when using --beacon flag")
+		}
+
+		fmt.Printf("Starting in beacon mode...\n")
+		fmt.Printf("Beacon Address: %s:%d\n", *beaconIP, *beaconPort)
+		fmt.Printf("Other nodes can discover this beacon from the blockchain\n")
+
+		// TODO: Create beacon announcement and add to next block
+		// For now, just indicate beacon mode is enabled
 	}
 
 	// Normal node startup (no specific command)

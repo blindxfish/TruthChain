@@ -3,6 +3,7 @@ package network
 import (
 	"fmt"
 	"log"
+	"net"
 	"sync"
 	"time"
 
@@ -23,6 +24,8 @@ type TrustNetwork struct {
 	TrustEngine   *TrustEngine
 	Topology      *NetworkTopology
 	MessageRouter *MessageRouter
+	PeerTable     *PeerTable   // Mesh management
+	MeshManager   *MeshManager // Mesh connection management
 
 	// Configuration
 	ListenPort    int
@@ -95,9 +98,11 @@ func NewTrustNetwork(
 		TrustEngine:   NewTrustEngine(),
 		Topology:      NewNetworkTopology(nodeID),
 		MessageRouter: NewMessageRouter(),
+		PeerTable:     NewPeerTable(32), // Default max 32 mesh peers
+		MeshManager:   nil,              // Will be initialized after network is created
 
 		ListenPort:    listenPort,
-		MaxPeers:      10,  // Default max 10 peers
+		MaxPeers:      10,  // Default max 10 direct peers
 		MinTrustScore: 0.3, // Minimum trust score for connections
 
 		IsRunning:   false,
@@ -123,11 +128,18 @@ func (tn *TrustNetwork) Start() error {
 
 	tn.IsRunning = true
 
+	// Initialize mesh manager
+	tn.MeshManager = NewMeshManager(tn)
+	if err := tn.MeshManager.Start(); err != nil {
+		return fmt.Errorf("failed to start mesh manager: %v", err)
+	}
+
 	// Start background goroutines
 	go tn.gossipWorker()
 	go tn.peerManager()
 	go tn.messageProcessor()
 	go tn.trustUpdater()
+	go tn.meshListener() // Listen for inbound mesh connections
 
 	log.Printf("TrustNetwork started on port %d", tn.ListenPort)
 	return nil
@@ -143,78 +155,61 @@ func (tn *TrustNetwork) Stop() error {
 	}
 
 	tn.IsRunning = false
+
+	// Stop mesh manager
+	if tn.MeshManager != nil {
+		tn.MeshManager.Stop()
+	}
+
 	close(tn.StopChan)
 
 	log.Printf("TrustNetwork stopped")
 	return nil
 }
 
-// AddPeer adds a new peer to the network
-func (tn *TrustNetwork) AddPeer(address string) (*Peer, error) {
-	tn.mu.Lock()
-	defer tn.mu.Unlock()
-
-	// Check if peer already exists
-	if _, exists := tn.Topology.Peers[address]; exists {
-		return nil, fmt.Errorf("peer %s already exists", address)
-	}
-
-	// Create new peer
-	peer := &Peer{
+// AddPeer adds a new peer to the mesh and topology
+func (tn *TrustNetwork) AddPeer(address string) (*MeshPeer, error) {
+	// Add to mesh peer table
+	tn.PeerTable.AddPeer(address, 1, "", 0.5)
+	peer, _ := tn.PeerTable.GetPeer(address)
+	peer.IsConnected = true
+	peer.LastSeen = time.Now()
+	// Add to topology for routing
+	p := &Peer{
 		Address:      address,
 		FirstSeen:    time.Now().Unix(),
 		LastSeen:     time.Now().Unix(),
-		UptimeScore:  0.0, // Will be updated
-		AgeScore:     0.0, // Will be calculated
-		TrustScore:   0.0, // Will be calculated
-		Latency:      0,   // Will be measured
-		HopDistance:  0,   // Direct connection
+		UptimeScore:  0.0,
+		AgeScore:     0.0,
+		TrustScore:   0.0,
+		Latency:      0,
+		HopDistance:  0,
 		Path:         []string{address},
 		IsConnected:  true,
 		ConnectionID: fmt.Sprintf("%s-%d", address, time.Now().Unix()),
 	}
-
-	// Calculate initial trust score
-	tn.TrustEngine.CalculateTrustScore(peer)
-
-	// Add to topology
-	tn.Topology.AddPeer(peer)
-
+	tn.TrustEngine.CalculateTrustScore(p)
+	tn.Topology.AddPeer(p)
 	// Send peer event
 	tn.PeerChan <- PeerEvent{
 		Type: PeerEventConnected,
-		Peer: peer,
+		Peer: p,
 	}
-
-	log.Printf("Added peer: %s (Trust: %.2f)", address, peer.TrustScore)
+	log.Printf("Added peer: %s (Trust: %.2f)", address, p.TrustScore)
 	return peer, nil
 }
 
-// RemovePeer removes a peer from the network
+// RemovePeer removes a peer from the mesh and topology
 func (tn *TrustNetwork) RemovePeer(address string) error {
-	tn.mu.Lock()
-	defer tn.mu.Unlock()
-
-	peer, exists := tn.Topology.Peers[address]
-	if !exists {
-		return fmt.Errorf("peer %s not found", address)
-	}
-
-	// Send peer event
-	tn.PeerChan <- PeerEvent{
-		Type:   PeerEventDisconnected,
-		Peer:   peer,
-		Reason: "Manual removal",
-	}
-
+	// Remove from mesh peer table
+	tn.PeerTable.MarkDisconnected(address)
 	// Remove from topology
 	tn.Topology.RemovePeer(address)
-
 	log.Printf("Removed peer: %s", address)
 	return nil
 }
 
-// BroadcastPost broadcasts a post to all connected peers
+// BroadcastPost broadcasts a post to all mesh peers
 func (tn *TrustNetwork) BroadcastPost(post *chain.Post) error {
 	tn.mu.RLock()
 	defer tn.mu.RUnlock()
@@ -235,11 +230,17 @@ func (tn *TrustNetwork) BroadcastPost(post *chain.Post) error {
 	// Send to message channel for processing
 	tn.MessageChan <- msg
 
+	// Also broadcast to mesh peers
+	if tn.MeshManager != nil {
+		// TODO: Serialize message and send via mesh
+		log.Printf("Broadcasting post to mesh: %s", post.Hash)
+	}
+
 	log.Printf("Broadcasting post: %s", post.Hash)
 	return nil
 }
 
-// BroadcastTransfer broadcasts a transfer to all connected peers
+// BroadcastTransfer broadcasts a transfer to all mesh peers
 func (tn *TrustNetwork) BroadcastTransfer(transfer *chain.Transfer) error {
 	tn.mu.RLock()
 	defer tn.mu.RUnlock()
@@ -259,6 +260,12 @@ func (tn *TrustNetwork) BroadcastTransfer(transfer *chain.Transfer) error {
 
 	// Send to message channel for processing
 	tn.MessageChan <- msg
+
+	// Also broadcast to mesh peers
+	if tn.MeshManager != nil {
+		// TODO: Serialize message and send via mesh
+		log.Printf("Broadcasting transfer to mesh: %s", transfer.Hash)
+	}
 
 	log.Printf("Broadcasting transfer: %s", transfer.Hash)
 	return nil
@@ -295,6 +302,12 @@ func (tn *TrustNetwork) GetNetworkStats() map[string]interface{} {
 		peers = append(peers, peerInfo)
 	}
 
+	// Add mesh statistics
+	meshStats := make(map[string]interface{})
+	if tn.MeshManager != nil {
+		meshStats = tn.MeshManager.GetMeshStats()
+	}
+
 	// Combine all stats
 	stats := map[string]interface{}{
 		"node_id":         tn.NodeID,
@@ -303,6 +316,7 @@ func (tn *TrustNetwork) GetNetworkStats() map[string]interface{} {
 		"max_peers":       tn.MaxPeers,
 		"min_trust_score": tn.MinTrustScore,
 		"peers":           peers,
+		"mesh":            meshStats,
 	}
 
 	// Merge topology and trust stats
@@ -316,11 +330,10 @@ func (tn *TrustNetwork) GetNetworkStats() map[string]interface{} {
 	return stats
 }
 
-// gossipWorker periodically sends gossip messages to peers
+// gossipWorker periodically sends gossip messages to mesh peers
 func (tn *TrustNetwork) gossipWorker() {
-	ticker := time.NewTicker(tn.Topology.GossipInterval)
+	ticker := time.NewTicker(30 * time.Second)
 	defer ticker.Stop()
-
 	for {
 		select {
 		case <-ticker.C:
@@ -331,34 +344,23 @@ func (tn *TrustNetwork) gossipWorker() {
 	}
 }
 
-// sendGossip sends a gossip message to all connected peers
+// sendGossip sends a gossip message to selected mesh peers
 func (tn *TrustNetwork) sendGossip() {
 	tn.mu.RLock()
-
-	if !tn.IsRunning || len(tn.Topology.Peers) == 0 {
+	if !tn.IsRunning || len(tn.PeerTable.peers) == 0 {
 		tn.mu.RUnlock()
 		return
 	}
-
-	// Create gossip message
-	gossipMsg := tn.Topology.CreateGossipMessage()
-
-	// Create network message
+	gossipMsg := tn.PeerTable.CreateGossipMessage()
 	msg := NetworkMessage{
 		Type:      MessageTypeGossip,
 		Source:    tn.NodeID,
 		Payload:   gossipMsg,
 		Timestamp: time.Now().Unix(),
-		TTL:       tn.Topology.MaxHops,
+		TTL:       10,
 	}
-
 	tn.mu.RUnlock()
-
-	// Send to message channel
 	tn.MessageChan <- msg
-
-	// Update last gossip time
-	tn.Topology.LastGossip = time.Now().Unix()
 }
 
 // peerManager handles peer-related events
@@ -417,19 +419,15 @@ func (tn *TrustNetwork) handleMessage(msg NetworkMessage) {
 	}
 }
 
-// handleGossipMessage processes gossip messages
+// handleGossipMessage processes mesh gossip messages
 func (tn *TrustNetwork) handleGossipMessage(msg NetworkMessage) {
-	gossipMsg, ok := msg.Payload.(*GossipMessage)
+	gossipMsg, ok := msg.Payload.([]*MeshPeer)
 	if !ok {
-		log.Printf("Invalid gossip message payload")
+		log.Printf("Invalid mesh gossip message payload")
 		return
 	}
-
-	// Process gossip message
-	updatedRoutes := tn.Topology.ProcessGossipMessage(gossipMsg)
-	if updatedRoutes > 0 {
-		log.Printf("Updated %d routes from gossip message", updatedRoutes)
-	}
+	tn.PeerTable.ProcessGossipMessage(msg.Source, gossipMsg)
+	log.Printf("Processed mesh gossip message from %s", msg.Source)
 }
 
 // handlePostMessage processes post messages
@@ -509,4 +507,39 @@ func abs(x float64) float64 {
 		return -x
 	}
 	return x
+}
+
+// meshListener listens for inbound mesh connections
+func (tn *TrustNetwork) meshListener() {
+	// Listen on the configured port
+	listener, err := net.Listen("tcp", fmt.Sprintf(":%d", tn.ListenPort))
+	if err != nil {
+		log.Printf("Failed to start mesh listener on port %d: %v", tn.ListenPort, err)
+		return
+	}
+	defer listener.Close()
+
+	log.Printf("Mesh listener started on port %d", tn.ListenPort)
+
+	for {
+		select {
+		case <-tn.StopChan:
+			return
+		default:
+			// Accept connections with timeout
+			listener.(*net.TCPListener).SetDeadline(time.Now().Add(1 * time.Second))
+			conn, err := listener.Accept()
+			if err != nil {
+				if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
+					continue // Timeout, try again
+				}
+				log.Printf("Error accepting connection: %v", err)
+				continue
+			}
+
+			// Handle the connection
+			remoteAddr := conn.RemoteAddr().String()
+			go tn.MeshManager.AcceptInboundConnection(conn, remoteAddr)
+		}
+	}
 }
