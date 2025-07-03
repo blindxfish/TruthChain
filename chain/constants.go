@@ -21,7 +21,56 @@ const (
 )
 
 // Genesis block timestamp (Unix timestamp when TruthChain was created)
+// This must remain constant for all mainnet nodes
 const MainnetGenesisTimestamp = 1751485627
+
+// Genesis block configuration - these values must remain constant
+const (
+	GenesisTimestamp = MainnetGenesisTimestamp // Use the same timestamp for consistency
+	GenesisHash      = "0000000000000000000000000000000000000000000000000000000000000000"
+	GenesisAuthor    = "Nik"
+	GenesisContent   = "Block 0 - This is where censorship died."
+
+	// Block configuration
+	MaxBlockSize = 1024 * 1024 // 1MB max block size
+	MaxPostSize  = 10000       // 10KB max post size
+
+	// Character configuration
+	CharacterThreshold = 1000 // Characters needed for block creation
+
+	// Transfer configuration
+	MaxTransferAmount = 1000000 // Maximum characters per transfer
+	MinTransferAmount = 1       // Minimum characters per transfer
+
+	// Network configuration
+	MaxPeers   = 50
+	MaxHops    = 10
+	DefaultTTL = 10
+
+	// Timeouts
+	ConnectionTimeout = 30 * time.Second
+	SyncTimeout       = 60 * time.Second
+	PingInterval      = 30 * time.Second
+
+	// Trust configuration
+	DefaultTrustScore = 0.5
+	MinTrustScore     = 0.1
+	MaxTrustScore     = 1.0
+
+	// Beacon configuration
+	BeaconRewardMultiplier = 1.5 // 50% bonus for beacon nodes
+	BeaconAnnounceInterval = 12 * time.Hour
+	MaxBeaconAnnounces     = 1 // Per 12-hour period
+
+	// Mesh configuration
+	DefaultMeshPort = 9876
+	DefaultSyncPort = 9877
+	MaxMeshPeers    = 32
+
+	// API configuration
+	DefaultAPIPort = 8080
+	APITimeout     = 30 * time.Second
+)
 
 // ValidateMainnetRules checks if the given parameters match mainnet consensus
 func ValidateMainnetRules(postThreshold int, networkID string) error {

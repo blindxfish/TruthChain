@@ -399,4 +399,248 @@ If you need assistance:
 3. Read the WhitePaper.txt for technical details
 4. Check the command help: `./truthchain.exe --help`
 
-**Welcome to TruthChain - where truth is permanent! 🌟** 
+**Welcome to TruthChain - where truth is permanent! 🌟**
+
+TRUTHCHAIN - DECENTRALIZED TRUTH NETWORK
+========================================
+
+TruthChain is a decentralized blockchain system for immutable posts and character-based currency.
+This guide shows you how to run TruthChain nodes and interact with the network.
+
+QUICK START
+-----------
+
+1. Build TruthChain:
+   go build -o truthchain cmd/main.go
+
+2. Run a full node (recommended for mainnet):
+   ./truthchain -beacon -mesh -mining -api
+
+3. Access the API:
+   http://localhost:8080/status
+
+NODE MODES
+----------
+
+TruthChain supports different node modes that can be combined:
+
+BEACON MODE (-beacon)
+- Announces your node to the network for discovery
+- Other nodes can find and connect to you
+- Use with -domain for public domain announcements
+- Example: ./truthchain -beacon -domain mainnet.truth-chain.org
+
+MESH MODE (-mesh)
+- Participates in the peer-to-peer mesh network
+- Syncs blockchain data with other nodes
+- Required for full network participation
+- Example: ./truthchain -mesh
+
+MINING MODE (-mining)
+- Enables uptime mining for character rewards
+- Earns characters for keeping your node online
+- Requires beacon mode for network discovery
+- Example: ./truthchain -beacon -mining
+
+API MODE (-api, default: true)
+- Runs the HTTP API server
+- Allows external applications to interact with your node
+- Can be disabled for headless operation
+- Example: ./truthchain -mesh -api=false
+
+STANDALONE API SERVER
+---------------------
+
+For production deployments, you can run the API server independently:
+
+1. Build the standalone API server:
+   go build -o api-server cmd/api_server/main.go
+
+2. Run the API server (connects to existing node database):
+   ./api-server -db truthchain.db -port 8080
+
+3. Stop/start the API server without affecting the node:
+   # Stop API server (Ctrl+C)
+   # Node continues running
+   # Start API server again
+   ./api-server -db truthchain.db -port 8080
+
+This allows you to:
+- Restart the API server for maintenance
+- Run multiple API servers on different ports
+- Separate API concerns from node operation
+- Update API without stopping the node
+
+NODE MANAGEMENT
+--------------
+
+GRACEFUL SHUTDOWN
+- Press Ctrl+C to stop the node gracefully
+- The node will:
+  * Stop all network connections
+  * Close database connections properly
+  * Save current state
+  * Exit cleanly
+
+RESTARTING NODES
+- Your blockchain data is preserved in the database
+- Restart with the same configuration
+- The node will sync with the network automatically
+- Genesis block is consistent across restarts
+
+DATABASE MANAGEMENT
+- Database file: truthchain.db (default)
+- Location: Current directory (use -db to specify path)
+- Backup: Copy the .db file while node is stopped
+- Reset: Delete the .db file to start fresh
+
+NETWORK CONFIGURATION
+--------------------
+
+PORTS
+- API Server: 8080 (default, use -api-port)
+- Mesh Network: 9876 (default, use -mesh-port)
+- Chain Sync: 9877 (default, use -sync-port)
+
+DOMAIN CONFIGURATION
+- For beacon nodes, specify your domain with -domain
+- Example: ./truthchain -beacon -domain mainnet.truth-chain.org
+- Ensure DNS points to your server
+- Configure port forwarding for mesh/sync ports
+
+FIREWALL SETUP
+- Open ports 9876 (mesh) and 9877 (sync) for network communication
+- Port 8080 (API) for external API access
+- Use UPNP or manual port forwarding
+
+API ENDPOINTS
+-------------
+
+HEALTH & STATUS
+GET /status          - Overall node status
+GET /health          - Health check
+GET /info            - Detailed node information
+
+BLOCKCHAIN
+GET /blockchain/latest    - Latest block
+GET /blockchain/length    - Chain length
+
+POSTS
+POST /posts              - Create new post
+GET  /posts/pending      - Pending posts
+
+TRANSFERS
+POST /transfers          - Create transfer
+GET  /transfers/pending  - Pending transfers
+
+WALLETS
+GET /wallets                    - All wallets
+GET /wallets/{address}          - Specific wallet
+GET /wallets/{address}/balance  - Wallet balance
+
+NETWORK
+GET /network/stats      - Network statistics
+GET /network/peers      - Connected peers
+
+EXAMPLES
+--------
+
+1. Run a mainnet beacon node:
+   ./truthchain -beacon -mesh -mining -domain mainnet.truth-chain.org
+
+2. Run a local development node:
+   ./truthchain -mesh -api
+
+3. Run a headless mesh node:
+   ./truthchain -mesh -api=false
+
+4. Run with custom database:
+   ./truthchain -db /path/to/truthchain.db -mesh
+
+5. Run standalone API server:
+   ./api-server -db truthchain.db -port 9090
+
+6. Run multiple API servers:
+   ./api-server -db truthchain.db -port 8080  # Main API
+   ./api-server -db truthchain.db -port 9090  # Secondary API
+
+TROUBLESHOOTING
+--------------
+
+DATABASE LOCKED
+- Ensure only one process accesses the database
+- Stop all TruthChain processes before restarting
+- Use standalone API server for multiple API instances
+
+GENESIS BLOCK ERRORS
+- Delete truthchain.db to reset the chain
+- Ensure consistent genesis block configuration
+- Check network ID matches mainnet settings
+
+NETWORK CONNECTION ISSUES
+- Verify firewall settings
+- Check port forwarding configuration
+- Ensure domain DNS is properly configured
+- Try running in mesh mode to connect to peers
+
+API SERVER ISSUES
+- Check if port is already in use
+- Verify database file exists and is accessible
+- Use standalone API server for independent operation
+
+PERFORMANCE
+-----------
+
+RECOMMENDED HARDWARE
+- CPU: 2+ cores
+- RAM: 4GB+ 
+- Storage: 10GB+ SSD
+- Network: Stable internet connection
+
+OPTIMIZATION
+- Use SSD storage for better database performance
+- Ensure adequate RAM for blockchain operations
+- Monitor network bandwidth usage
+- Regular database backups
+
+SECURITY
+--------
+
+WALLET SAFETY
+- Keep your wallet private key secure
+- Backup wallet.dat file
+- Use strong passwords for wallet encryption
+- Don't share private keys
+
+NETWORK SECURITY
+- Use firewalls to restrict access
+- Monitor for suspicious activity
+- Keep software updated
+- Use HTTPS for API access in production
+
+MAINTENANCE
+-----------
+
+REGULAR TASKS
+- Monitor node uptime and performance
+- Backup database regularly
+- Check for software updates
+- Monitor network connectivity
+
+LOGS
+- Check console output for errors
+- Monitor API access logs
+- Review network connection logs
+- Track blockchain sync status
+
+SUPPORT
+-------
+
+For issues and questions:
+- Check this guide first
+- Review error messages carefully
+- Ensure proper configuration
+- Test with default settings
+
+TruthChain is designed for reliability and ease of use. The standalone API server
+and improved node management make it production-ready for continuous operation. 

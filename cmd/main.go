@@ -1,23 +1,55 @@
 package main
 
 import (
+	"context"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"log"
+	"net/http"
 	"os"
 	"os/exec"
-	"strconv"
-	"strings"
+	"os/signal"
+	"syscall"
 	"time"
 
-	"github.com/blindxfish/truthchain/api"
 	"github.com/blindxfish/truthchain/blockchain"
-	"github.com/blindxfish/truthchain/chain"
 	"github.com/blindxfish/truthchain/miner"
 	"github.com/blindxfish/truthchain/network"
 	"github.com/blindxfish/truthchain/store"
 	"github.com/blindxfish/truthchain/wallet"
+	"github.com/gorilla/mux"
 )
+
+// TruthChainNode represents the main TruthChain node
+type TruthChainNode struct {
+	blockchain   *blockchain.Blockchain
+	storage      *store.BoltDBStorage
+	wallet       *wallet.Wallet
+	trustNetwork *network.TrustNetwork
+	beacon       *network.BeaconManager
+	miner        *miner.UptimeTracker
+	apiServer    *http.Server
+	router       *mux.Router
+	config       *NodeConfig
+	isRunning    bool
+	stopChan     chan struct{}
+}
+
+// NodeConfig holds the node configuration
+type NodeConfig struct {
+	DBPath        string
+	APIPort       int
+	MeshPort      int
+	SyncPort      int
+	PostThreshold int
+	NetworkID     string
+	BeaconMode    bool
+	MeshMode      bool
+	MiningMode    bool
+	APIMode       bool
+	Domain        string
+}
 
 func clearScreen() {
 	cmd := exec.Command("clear")
@@ -35,808 +67,553 @@ func getLocalIP() string {
 }
 
 func main() {
-	// Define command line flags
+	// Parse command line flags
 	var (
-		walletPath  = flag.String("wallet", "wallet.key", "Path to wallet file")
-		showWallet  = flag.Bool("show-wallet", false, "Show wallet address and exit")
-		debug       = flag.Bool("debug", false, "Show additional wallet information")
-		networkType = flag.String("network", "mainnet", "Network type: mainnet, testnet, multisig")
-		walletName  = flag.String("name", "", "Wallet name for new wallets")
-
-		// Storage and blockchain commands
-		dbPath           = flag.String("db", "truthchain.db", "Path to database file")
-		postContent      = flag.String("post", "", "Post content to the blockchain")
-		showPosts        = flag.Bool("posts", false, "Show recent posts")
-		showBlocks       = flag.Bool("blocks", false, "Show recent blocks")
-		showStatus       = flag.Bool("status", false, "Show blockchain status")
-		showMempool      = flag.Bool("mempool", false, "Show mempool (pending posts)")
-		forceBlock       = flag.Bool("force-block", false, "Force creation of a new block")
-		postThreshold    = flag.Int("post-threshold", chain.MainnetMinPosts, "Number of posts needed for block creation")
-		monitor          = flag.Bool("monitor", false, "Show live node/network stats (like top)")
-		apiPort          = flag.Int("api-port", 0, "Start HTTP API server on port (0 = disabled)")
-		sendTo           = flag.String("send", "", "Send characters to address")
-		sendAmount       = flag.Int("amount", 0, "Amount of characters to send")
-		showTransfers    = flag.Bool("show-transfers", false, "Show transfer pool information")
-		processTransfers = flag.Bool("process-transfers", false, "Process all pending transfers")
-		showState        = flag.Bool("show-state", false, "Show current blockchain state")
-		showWallets      = flag.Bool("show-wallets", false, "Show all wallet states")
-		addBalance       = flag.Int("add-balance", 0, "Add balance to current wallet (for testing)")
-
-		// Network and sync flags
-		syncPort   = flag.Int("sync-port", 0, "Start sync server on port (0 = disabled)")
-		syncFrom   = flag.String("sync-from", "", "Sync blocks from peer address (e.g., 192.168.1.100:9876)")
-		beaconMode = flag.Bool("beacon", false, "Enable beacon mode for peer discovery")
-		beaconIP   = flag.String("beacon-ip", "", "Beacon IP address (required with --beacon)")
-		beaconPort = flag.Int("beacon-port", 9876, "Beacon port (default: 9876)")
-		meshMode   = flag.Bool("mesh", false, "Enable mesh network mode for decentralized sync")
-		meshPort   = flag.Int("mesh-port", 9877, "Mesh network port (default: 9877)")
-
-		// Bootstrap flags
-		showBootstrap   = flag.Bool("show-bootstrap", false, "Show bootstrap nodes")
-		addBootstrap    = flag.String("add-bootstrap", "", "Add bootstrap node (format: address,description,region,is_beacon,trust_score)")
-		removeBootstrap = flag.String("remove-bootstrap", "", "Remove bootstrap node by address")
-		bootstrapConfig = flag.String("bootstrap-config", "bootstrap.json", "Bootstrap configuration file")
-
-		// Wallet backup and restore flags
-		backupWallet   = flag.String("backup", "", "Create wallet backup to file path")
-		restoreWallet  = flag.String("restore", "", "Restore wallet from backup file path")
-		validateBackup = flag.String("validate-backup", "", "Validate backup file without restoring")
+		dbPath        = flag.String("db", "truthchain.db", "Path to database file")
+		apiPort       = flag.Int("api-port", 8080, "API server port")
+		meshPort      = flag.Int("mesh-port", 9876, "Mesh network port")
+		syncPort      = flag.Int("sync-port", 9877, "Chain sync port")
+		postThreshold = flag.Int("post-threshold", 5, "Posts needed to create a block")
+		networkID     = flag.String("network", "truthchain-mainnet", "Network identifier")
+		beaconMode    = flag.Bool("beacon", false, "Run in beacon mode")
+		meshMode      = flag.Bool("mesh", false, "Run in mesh mode")
+		miningMode    = flag.Bool("mining", false, "Enable uptime mining")
+		apiMode       = flag.Bool("api", true, "Enable API server")
+		domain        = flag.String("domain", "", "Domain for beacon announcements")
+		help          = flag.Bool("help", false, "Show help message")
 	)
 	flag.Parse()
 
-	// Handle bootstrap commands (before any other initialization)
-	if *showBootstrap {
-		fmt.Printf("TruthChain Bootstrap Nodes:\n")
-		fmt.Printf("Config file: %s\n\n", *bootstrapConfig)
-
-		bootstrapManager := network.NewBootstrapManager(*bootstrapConfig)
-		nodes := bootstrapManager.GetNodes()
-
-		if len(nodes) == 0 {
-			fmt.Printf("No bootstrap nodes configured.\n")
-		} else {
-			for i, node := range nodes {
-				fmt.Printf("Node %d:\n", i+1)
-				fmt.Printf("  Address: %s\n", node.Address)
-				fmt.Printf("  Description: %s\n", node.Description)
-				fmt.Printf("  Region: %s\n", node.Region)
-				fmt.Printf("  Type: %s\n", map[bool]string{true: "Beacon", false: "Mesh"}[node.IsBeacon])
-				fmt.Printf("  Trust Score: %.2f\n", node.TrustScore)
-				if node.LastSeen > 0 {
-					fmt.Printf("  Last Seen: %s\n", time.Unix(node.LastSeen, 0).Format("2006-01-02 15:04:05"))
-				} else {
-					fmt.Printf("  Last Seen: Never\n")
-				}
-				fmt.Println()
-			}
-		}
+	if *help {
+		printHelp()
 		return
 	}
 
-	if *addBootstrap != "" {
-		// Parse bootstrap node parameters
-		parts := strings.Split(*addBootstrap, ",")
-		if len(parts) != 5 {
-			log.Fatalf("Invalid bootstrap node format. Use: address,description,region,is_beacon,trust_score")
-		}
-
-		address := strings.TrimSpace(parts[0])
-		description := strings.TrimSpace(parts[1])
-		region := strings.TrimSpace(parts[2])
-		isBeaconStr := strings.TrimSpace(parts[3])
-		trustScoreStr := strings.TrimSpace(parts[4])
-
-		isBeacon := isBeaconStr == "true" || isBeaconStr == "1"
-		trustScore, err := strconv.ParseFloat(trustScoreStr, 64)
-		if err != nil {
-			log.Fatalf("Invalid trust score: %s", trustScoreStr)
-		}
-
-		bootstrapManager := network.NewBootstrapManager(*bootstrapConfig)
-		if err := bootstrapManager.AddNode(address, description, region, isBeacon, trustScore); err != nil {
-			log.Fatalf("Failed to add bootstrap node: %v", err)
-		}
-
-		fmt.Printf("✅ Bootstrap node added successfully!\n")
-		fmt.Printf("Address: %s\n", address)
-		fmt.Printf("Description: %s\n", description)
-		fmt.Printf("Region: %s\n", region)
-		fmt.Printf("Type: %s\n", map[bool]string{true: "Beacon", false: "Mesh"}[isBeacon])
-		fmt.Printf("Trust Score: %.2f\n", trustScore)
-		return
+	// Create node configuration
+	config := &NodeConfig{
+		DBPath:        *dbPath,
+		APIPort:       *apiPort,
+		MeshPort:      *meshPort,
+		SyncPort:      *syncPort,
+		PostThreshold: *postThreshold,
+		NetworkID:     *networkID,
+		BeaconMode:    *beaconMode,
+		MeshMode:      *meshMode,
+		MiningMode:    *miningMode,
+		APIMode:       *apiMode,
+		Domain:        *domain,
 	}
 
-	if *removeBootstrap != "" {
-		bootstrapManager := network.NewBootstrapManager(*bootstrapConfig)
-		if err := bootstrapManager.RemoveNode(*removeBootstrap); err != nil {
-			log.Fatalf("Failed to remove bootstrap node: %v", err)
-		}
-
-		fmt.Printf("✅ Bootstrap node removed successfully!\n")
-		fmt.Printf("Address: %s\n", *removeBootstrap)
-		return
-	}
-
-	// Load or create wallet
-	var w *wallet.Wallet
-	var err error
-
-	// Try to load existing wallet first
-	if _, statErr := os.Stat(*walletPath); statErr == nil {
-		w, err = wallet.LoadWallet(*walletPath)
-		if err != nil {
-			log.Fatalf("Failed to load wallet: %v", err)
-		}
-	} else {
-		// Create new wallet based on network type
-		switch *networkType {
-		case "mainnet":
-			w, err = wallet.NewWalletWithMetadata(*walletName, wallet.TruthChainMainnetVersion)
-		case "testnet":
-			w, err = wallet.NewTestnetWallet(*walletName)
-		case "multisig":
-			w, err = wallet.NewMultisigWallet(*walletName)
-		default:
-			log.Fatalf("Invalid network type: %s. Use mainnet, testnet, or multisig", *networkType)
-		}
-
-		if err != nil {
-			log.Fatalf("Failed to create wallet: %v", err)
-		}
-
-		// Save the new wallet
-		if err := w.SaveWallet(*walletPath); err != nil {
-			log.Fatalf("Failed to save wallet: %v", err)
-		}
-	}
-
-	// Handle wallet backup commands (before blockchain initialization)
-	if *backupWallet != "" {
-		fmt.Printf("Creating wallet backup to: %s\n", *backupWallet)
-
-		if err := w.SaveBackup(*backupWallet); err != nil {
-			log.Fatalf("Failed to create wallet backup: %v", err)
-		}
-
-		fmt.Printf("✅ Wallet backup created successfully!\n")
-		fmt.Printf("Backup file: %s\n", *backupWallet)
-		fmt.Printf("Wallet address: %s\n", w.GetAddress())
-		fmt.Printf("Network: %s\n", w.GetNetwork())
-
-		if w.Metadata != nil {
-			fmt.Printf("Wallet name: %s\n", w.Metadata.Name)
-			fmt.Printf("Created: %s\n", w.Metadata.Created.Format("2006-01-02 15:04:05"))
-		}
-
-		fmt.Printf("\n⚠️  IMPORTANT: Keep this backup file secure!\n")
-		fmt.Printf("   - Store it in a safe location\n")
-		fmt.Printf("   - Make multiple copies\n")
-		fmt.Printf("   - Anyone with this file can access your wallet\n")
-		return
-	}
-
-	if *restoreWallet != "" {
-		fmt.Printf("Restoring wallet from backup: %s\n", *restoreWallet)
-
-		restoredWallet, err := wallet.ImportBackup(*restoreWallet)
-		if err != nil {
-			log.Fatalf("Failed to restore wallet: %v", err)
-		}
-
-		// Save the restored wallet to the specified path
-		if err := restoredWallet.SaveWallet(*walletPath); err != nil {
-			log.Fatalf("Failed to save restored wallet: %v", err)
-		}
-
-		fmt.Printf("✅ Wallet restored successfully!\n")
-		fmt.Printf("Wallet file: %s\n", *walletPath)
-		fmt.Printf("Wallet address: %s\n", restoredWallet.GetAddress())
-		fmt.Printf("Network: %s\n", restoredWallet.GetNetwork())
-
-		if restoredWallet.Metadata != nil {
-			fmt.Printf("Wallet name: %s\n", restoredWallet.Metadata.Name)
-			fmt.Printf("Original created: %s\n", restoredWallet.Metadata.Created.Format("2006-01-02 15:04:05"))
-			fmt.Printf("Last used: %s\n", restoredWallet.Metadata.LastUsed.Format("2006-01-02 15:04:05"))
-		}
-
-		fmt.Printf("\n✅ You can now continue earning with the same wallet!\n")
-		return
-	}
-
-	if *validateBackup != "" {
-		fmt.Printf("Validating backup file: %s\n", *validateBackup)
-
-		if err := wallet.ValidateBackup(*validateBackup); err != nil {
-			log.Fatalf("❌ Backup validation failed: %v", err)
-		}
-
-		fmt.Printf("✅ Backup file is valid!\n")
-		fmt.Printf("File: %s\n", *validateBackup)
-		fmt.Printf("Ready for restoration\n")
-		return
-	}
-
-	// Initialize storage
-	storage, err := store.NewBoltDBStorage(*dbPath)
+	// Create and start node
+	node, err := NewTruthChainNode(config)
 	if err != nil {
-		log.Fatalf("Failed to initialize storage: %v", err)
+		log.Fatalf("Failed to create node: %v", err)
 	}
-	defer storage.Close()
 
-	// Initialize blockchain with storage
-	blockchain, err := blockchain.NewBlockchain(storage, *postThreshold)
+	// Start the node
+	if err := node.Start(); err != nil {
+		log.Fatalf("Failed to start node: %v", err)
+	}
+
+	// Wait for shutdown signal
+	sigChan := make(chan os.Signal, 1)
+	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
+	<-sigChan
+
+	log.Printf("Shutting down TruthChain node...")
+	if err := node.Stop(); err != nil {
+		log.Printf("Error stopping node: %v", err)
+	}
+}
+
+// NewTruthChainNode creates a new TruthChain node
+func NewTruthChainNode(config *NodeConfig) (*TruthChainNode, error) {
+	// Initialize storage with better options for concurrent access
+	storage, err := store.NewBoltDBStorage(config.DBPath)
 	if err != nil {
-		log.Fatalf("Failed to initialize blockchain: %v", err)
+		return nil, fmt.Errorf("failed to initialize storage: %w", err)
 	}
 
-	// Initialize beacon manager (with nil keys for now - will implement conversion later)
-	beaconManager := network.NewBeaconManager(nil, nil)
-
-	// Enable beacon mode if requested
-	if *beaconMode {
-		if *beaconIP == "" {
-			log.Fatalf("Beacon IP address required when using --beacon flag")
-		}
-		beaconManager.EnableBeacon(*beaconIP, *beaconPort)
-		fmt.Printf("Beacon mode enabled: %s:%d\n", *beaconIP, *beaconPort)
+	// Initialize blockchain
+	blockchain, err := blockchain.NewBlockchain(storage, config.PostThreshold)
+	if err != nil {
+		return nil, fmt.Errorf("failed to initialize blockchain: %w", err)
 	}
 
-	// Handle wallet-only commands
-	if *showWallet {
-		fmt.Printf("Wallet Address: %s\n", w.GetAddress())
-		fmt.Printf("Wallet File: %s\n", *walletPath)
-		fmt.Printf("Network: %s\n", w.GetNetwork())
-
-		if *debug {
-			fmt.Printf("Public Key (compressed): %s\n", w.ExportPublicKeyHex())
-			fmt.Printf("Public Key (uncompressed): %s\n", w.ExportPublicKeyUncompressedHex())
-			fmt.Printf("Version Byte: 0x%02X\n", w.GetVersionByte())
-			fmt.Printf("Address Valid: %t\n", wallet.ValidateAddressWithVersion(w.GetAddress(), w.GetVersionByte()))
-
-			if w.Metadata != nil {
-				fmt.Printf("Wallet Name: %s\n", w.Metadata.Name)
-				fmt.Printf("Created: %s\n", w.Metadata.Created.Format("2006-01-02 15:04:05"))
-				fmt.Printf("Last Used: %s\n", w.Metadata.LastUsed.Format("2006-01-02 15:04:05"))
-				if w.Metadata.Notes != "" {
-					fmt.Printf("Notes: %s\n", w.Metadata.Notes)
-				}
-			}
-		}
-		return
+	// Initialize wallet
+	wallet, err := wallet.NewWallet()
+	if err != nil {
+		return nil, fmt.Errorf("failed to initialize wallet: %w", err)
 	}
 
-	// Handle blockchain commands
-	if *postContent != "" {
-		// Create and add post
-		post, err := blockchain.CreatePost(*postContent, w)
-		if err != nil {
-			log.Fatalf("Failed to create post: %v", err)
-		}
+	// Create TrustNetwork (mesh manager is handled inside it)
+	trustNet := network.NewTrustNetwork(
+		wallet.GetAddress(),
+		wallet,
+		storage,
+		nil, // UptimeTracker (set later if mining enabled)
+		blockchain,
+		config.MeshPort,
+		"", // Bootstrap config (can be a file or string)
+	)
 
-		err = blockchain.AddPost(*post)
-		if err != nil {
-			log.Fatalf("Failed to add post to blockchain: %v", err)
-		}
+	// Create router for API
+	router := mux.NewRouter()
 
-		fmt.Printf("Post created successfully!\n")
-		fmt.Printf("Post Hash: %s\n", post.Hash)
-		fmt.Printf("Author: %s\n", post.Author)
-		fmt.Printf("Characters: %d\n", post.GetCharacterCount())
-		fmt.Printf("Pending Posts: %d/%d\n", blockchain.GetPendingPostCount(), *postThreshold)
-
-		if blockchain.GetPendingPostCount() >= *postThreshold {
-			fmt.Printf("✅ New block created!\n")
-		}
-		return
+	// Create API server
+	apiServer := &http.Server{
+		Addr:         fmt.Sprintf(":%d", config.APIPort),
+		Handler:      router,
+		ReadTimeout:  30 * time.Second,
+		WriteTimeout: 30 * time.Second,
+		IdleTimeout:  60 * time.Second,
 	}
 
-	if *showPosts {
-		// Show recent posts from latest block
-		latestBlock, err := blockchain.GetLatestBlock()
-		if err != nil {
-			log.Fatalf("Failed to get latest block: %v", err)
-		}
-
-		if latestBlock != nil && len(latestBlock.Posts) > 0 {
-			fmt.Printf("Recent posts from block %d:\n", latestBlock.Index)
-			fmt.Printf("Block Hash: %s\n\n", latestBlock.Hash)
-
-			for i, post := range latestBlock.Posts {
-				fmt.Printf("Post %d:\n", i+1)
-				fmt.Printf("  Author: %s\n", post.Author)
-				fmt.Printf("  Content: %s\n", post.Content)
-				fmt.Printf("  Characters: %d\n", post.GetCharacterCount())
-				fmt.Printf("  Hash: %s\n", post.Hash)
-				fmt.Printf("  Timestamp: %d\n\n", post.Timestamp)
-			}
-		} else {
-			fmt.Println("No posts found in the latest block.")
-		}
-
-		// Show pending posts
-		pendingCount := blockchain.GetPendingPostCount()
-		if pendingCount > 0 {
-			fmt.Printf("Pending posts (%d):\n", pendingCount)
-			fmt.Printf("Pending posts: %d/%d\n", blockchain.GetPendingPostCount(), *postThreshold)
-
-			// Show pending posts details
-			pendingPosts := blockchain.GetPendingPosts()
-			for i, post := range pendingPosts {
-				fmt.Printf("  ⏳ Pending Post %d:\n", i+1)
-				fmt.Printf("    Author: %s\n", post.Author)
-				fmt.Printf("    Content: %s\n", post.Content)
-				fmt.Printf("    Characters: %d\n", post.GetCharacterCount())
-				fmt.Printf("    Hash: %s\n", post.Hash)
-				fmt.Printf("    Timestamp: %d\n\n", post.Timestamp)
-			}
-		}
-		return
+	node := &TruthChainNode{
+		blockchain:   blockchain,
+		storage:      storage,
+		wallet:       wallet,
+		trustNetwork: trustNet,
+		apiServer:    apiServer,
+		router:       router,
+		config:       config,
+		stopChan:     make(chan struct{}),
 	}
 
-	if *showBlocks {
-		// Show recent blocks
-		chainLength, err := blockchain.GetChainLength()
-		if err != nil {
-			log.Fatalf("Failed to get chain length: %v", err)
-		}
-		fmt.Printf("Blockchain length: %d blocks\n\n", chainLength)
-
-		// Show last 5 blocks (or all if less than 5)
-		start := 0
-		if chainLength > 5 {
-			start = chainLength - 5
-		}
-
-		for i := start; i < chainLength; i++ {
-			block, err := blockchain.GetBlockByIndex(i)
-			if err != nil {
-				continue
-			}
-			if block != nil {
-				fmt.Printf("Block %d:\n", block.Index)
-				fmt.Printf("  Hash: %s\n", block.Hash)
-				fmt.Printf("  Previous Hash: %s\n", block.PrevHash)
-				fmt.Printf("  Posts: %d\n", block.GetPostCount())
-				fmt.Printf("  Characters: %d\n", block.GetCharacterCount())
-				fmt.Printf("  Timestamp: %d\n\n", block.Timestamp)
-			}
-		}
-		return
-	}
-
-	if *showStatus {
-		// Show blockchain status
-		info, err := blockchain.GetBlockchainInfo()
-		if err != nil {
-			log.Fatalf("Failed to get blockchain info: %v", err)
-		}
-
-		fmt.Printf("TruthChain Status:\n")
-		fmt.Printf("  Chain Length: %v\n", info["chain_length"])
-		fmt.Printf("  Total Posts: %v\n", info["total_post_count"])
-		fmt.Printf("  Total Characters: %v\n", info["total_character_count"])
-		fmt.Printf("  Pending Posts: %v\n", info["pending_post_count"])
-		fmt.Printf("  Pending Characters: %v/%v\n", info["pending_character_count"], info["character_threshold"])
-
-		if latestBlock, err := blockchain.GetLatestBlock(); err == nil && latestBlock != nil {
-			fmt.Printf("  Latest Block: %d\n", latestBlock.Index)
-			fmt.Printf("  Latest Block Hash: %s\n", latestBlock.Hash)
-		}
-
-		// Validate chain
-		if err := blockchain.ValidateChain(); err != nil {
-			fmt.Printf("  Chain Validation: ❌ %v\n", err)
-		} else {
-			fmt.Printf("  Chain Validation: ✅ Valid\n")
-		}
-		return
-	}
-
-	if *showMempool {
-		// Show mempool information
-		mempoolInfo := blockchain.GetMempoolInfo()
-		fmt.Printf("TruthChain Mempool:\n")
-		fmt.Printf("  Pending Posts: %v\n", mempoolInfo["pending_post_count"])
-		fmt.Printf("  Pending Characters: %v/%v\n", mempoolInfo["pending_character_count"], mempoolInfo["character_threshold"])
-
-		posts := mempoolInfo["posts"].([]map[string]interface{})
-		if len(posts) > 0 {
-			fmt.Printf("\nPending Posts:\n")
-			for i, post := range posts {
-				fmt.Printf("  ⏳ Post %d:\n", i+1)
-				fmt.Printf("    Hash: %s\n", post["hash"])
-				fmt.Printf("    Author: %s\n", post["author"])
-				fmt.Printf("    Content: %s\n", post["content"])
-				fmt.Printf("    Characters: %v\n", post["characters"])
-				fmt.Printf("    Timestamp: %v\n\n", post["timestamp"])
-			}
-		} else {
-			fmt.Printf("\nNo pending posts in mempool.\n")
-		}
-		return
-	}
-
-	if *forceBlock {
-		// Force creation of a new block
-		pendingCount := blockchain.GetPendingPostCount()
-		if pendingCount == 0 {
-			fmt.Println("No pending posts to create a block from.")
-			return
-		}
-
-		err := blockchain.ForceCreateBlock()
-		if err != nil {
-			log.Fatalf("Failed to force create block: %v", err)
-		}
-
-		chainLength, err := blockchain.GetChainLength()
-		if err != nil {
-			log.Fatalf("Failed to get chain length: %v", err)
-		}
-
-		fmt.Printf("✅ Block created successfully!\n")
-		fmt.Printf("New block index: %d\n", chainLength-1)
-		return
-	}
-
-	if *sendTo != "" && *sendAmount > 0 {
-		// Create and add transfer
-		transfer, err := blockchain.CreateTransfer(*sendTo, *sendAmount, w)
-		if err != nil {
-			log.Fatalf("Failed to create transfer: %v", err)
-		}
-
-		if err := blockchain.AddTransfer(*transfer); err != nil {
-			log.Fatalf("Failed to add transfer: %v", err)
-		}
-
-		fmt.Printf("✅ Transfer created successfully!\n")
-		fmt.Printf("From: %s\n", transfer.From)
-		fmt.Printf("To: %s\n", transfer.To)
-		fmt.Printf("Amount: %d characters\n", transfer.Amount)
-		fmt.Printf("Gas Fee: %d character\n", transfer.GasFee)
-		fmt.Printf("Total Cost: %d characters\n", transfer.GetTotalCost())
-		fmt.Printf("Hash: %s\n", transfer.Hash)
-		fmt.Printf("Nonce: %d\n", transfer.Nonce)
-		return
-	}
-
-	if *showTransfers {
-		// Show transfer pool information
-		transferInfo := blockchain.GetTransferPoolInfo()
-		fmt.Printf("TruthChain Transfer Pool:\n")
-		fmt.Printf("  Pending Transfers: %v\n", transferInfo["transfer_count"])
-		fmt.Printf("  Total Character Volume: %v\n", transferInfo["total_character_volume"])
-
-		transfers := transferInfo["transfers"].([]map[string]interface{})
-		if len(transfers) > 0 {
-			fmt.Printf("\nPending Transfers:\n")
-			for i, transfer := range transfers {
-				fmt.Printf("  ⏳ Transfer %d:\n", i+1)
-				fmt.Printf("    Hash: %s\n", transfer["hash"])
-				fmt.Printf("    From: %s\n", transfer["from"])
-				fmt.Printf("    To: %s\n", transfer["to"])
-				fmt.Printf("    Amount: %v\n", transfer["amount"])
-				fmt.Printf("    Gas Fee: %v\n", transfer["gas_fee"])
-				fmt.Printf("    Timestamp: %v\n", transfer["timestamp"])
-				fmt.Printf("    Nonce: %v\n\n", transfer["nonce"])
-			}
-		} else {
-			fmt.Printf("\nNo pending transfers in pool.\n")
-		}
-		return
-	}
-
-	if *processTransfers {
-		// Process pending transfers
-		if err := blockchain.ProcessTransfers(); err != nil {
-			log.Fatalf("Failed to process transfers: %v", err)
-		}
-
-		fmt.Printf("✅ Transfers processed successfully!\n")
-		return
-	}
-
-	if *showState {
-		stateInfo := blockchain.GetStateInfo()
-
-		fmt.Printf("TruthChain State:\n")
-		fmt.Printf("  Wallet Count: %v\n", stateInfo["wallet_count"])
-		fmt.Printf("  Total Character Supply: %v\n", stateInfo["total_character_supply"])
-
-		wallets := stateInfo["wallets"].([]map[string]interface{})
-		if len(wallets) > 0 {
-			fmt.Printf("\nWallets:\n")
-			for i, wallet := range wallets {
-				fmt.Printf("  %d. %s\n", i+1, wallet["address"])
-				fmt.Printf("     Balance: %v characters\n", wallet["balance"])
-				fmt.Printf("     Nonce: %v\n", wallet["nonce"])
-				fmt.Printf("     Last TX: %v\n", wallet["last_tx_time"])
-			}
-		}
-		return
-	}
-
-	if *showWallets {
-		stateInfo := blockchain.GetStateInfo()
-		wallets := stateInfo["wallets"].([]map[string]interface{})
-
-		if len(wallets) == 0 {
-			fmt.Printf("No wallets in state.\n")
-			return
-		}
-
-		fmt.Printf("Wallet States (%d total):\n", len(wallets))
-		fmt.Printf("%-50s %-15s %-10s %-20s\n", "Address", "Balance", "Nonce", "Last Transaction")
-		fmt.Printf("%s\n", strings.Repeat("-", 95))
-
-		for _, wallet := range wallets {
-			address := wallet["address"].(string)
-			balance := wallet["balance"].(int)
-			nonce := wallet["nonce"].(int64)
-			lastTx := wallet["last_tx_time"].(int64)
-
-			// Format last transaction time
-			lastTxStr := "Never"
-			if lastTx > 0 {
-				lastTxStr = time.Unix(lastTx, 0).Format("2006-01-02 15:04:05")
-			}
-
-			fmt.Printf("%-50s %-15d %-10d %-20s\n", address, balance, nonce, lastTxStr)
-		}
-		return
-	}
-
-	if *addBalance > 0 {
-		// Get current balance from storage
-		currentBalance, err := blockchain.GetCharacterBalance(w.GetAddress())
-		if err != nil {
-			// If wallet doesn't exist in storage, start with 0
-			currentBalance = 0
-		}
-
-		// Add balance to current wallet
-		if err := blockchain.UpdateCharacterBalance(w.GetAddress(), *addBalance); err != nil {
-			log.Fatalf("Failed to add balance: %v", err)
-		}
-
-		// Calculate total balance
-		totalBalance := currentBalance + *addBalance
-
-		// Update state manager with total balance
-		blockchain.UpdateWalletState(w.GetAddress(), totalBalance, 0)
-
-		fmt.Printf("✅ Added %d characters to wallet %s\n", *addBalance, w.GetAddress())
-		fmt.Printf("Previous balance: %d characters\n", currentBalance)
-		fmt.Printf("New total balance: %d characters\n", totalBalance)
-		return
-	}
-
-	if *monitor {
-		// Initialize uptime tracker
-		uptimeTracker := miner.NewUptimeTracker(w, storage, beaconManager)
-		uptimeTracker.LoadHeartbeats() // Load heartbeats from storage
-
-		for {
-			clearScreen()
-			fmt.Println("TruthChain Node Monitor (press Ctrl+C to exit)")
-			fmt.Println("============================================")
-
-			// Node stats
-			uptimeInfo := uptimeTracker.GetUptimeInfo()
-			fmt.Println("[Node Stats]")
-			fmt.Printf("  Character Balance: %v\n", uptimeInfo["character_balance"])
-			fmt.Printf("  Earning Rate: %v chars/10min, %v chars/day\n", "N/A", "N/A")
-			fmt.Printf("  Uptime (24h): %.2f%%\n", uptimeInfo["uptime_24h_percent"])
-			fmt.Printf("  Uptime (total): %.2f%%\n", uptimeInfo["uptime_total_percent"])
-			fmt.Printf("  Heartbeats (24h): %v\n", uptimeInfo["heartbeat_count"])
-			fmt.Printf("  Last Reward: %v\n", uptimeInfo["last_reward"])
-			fmt.Printf("  Beacon Mode: %v\n", uptimeInfo["is_beacon"])
-			if uptimeInfo["is_beacon"].(bool) {
-				fmt.Printf("  Beacon Bonus: +%.0f%%\n", uptimeInfo["beacon_bonus_rate"])
-				fmt.Printf("  Beacon Uptime: %.2f%%\n", uptimeInfo["beacon_uptime"])
-			}
-			fmt.Println()
-
-			// Blockchain stats
-			chainInfo, _ := blockchain.GetBlockchainInfo()
-			fmt.Println("[Blockchain Stats]")
-			fmt.Printf("  Block Height: %v\n", chainInfo["chain_length"])
-			fmt.Printf("  Total Posts: %v\n", chainInfo["total_post_count"])
-			fmt.Printf("  Total Characters: %v\n", chainInfo["total_character_count"])
-			fmt.Printf("  Pending Posts: %v\n", chainInfo["pending_post_count"])
-			fmt.Printf("  Pending Characters: %v/%v\n", chainInfo["pending_character_count"], chainInfo["post_threshold"])
-			fmt.Println()
-
-			// Network stats
-			fmt.Println("[Network Stats]")
-			if *meshMode {
-				// TODO: Get mesh stats from trust network
-				fmt.Printf("  Mesh Network: Active\n")
-				fmt.Printf("  Mesh Port: %d\n", *meshPort)
-				fmt.Printf("  Mesh stats will be shown here when integrated.\n")
-			} else {
-				fmt.Printf("  Mesh Network: Disabled\n")
-				fmt.Printf("  Use --mesh to enable decentralized sync\n")
-			}
-			fmt.Println()
-
-			time.Sleep(5 * time.Second)
+	// Initialize network components if enabled
+	if config.MeshMode {
+		if err := node.initializeMesh(); err != nil {
+			return nil, fmt.Errorf("failed to initialize mesh: %w", err)
 		}
 	}
 
-	// Start API server if requested
-	if *apiPort > 0 {
-		// Initialize uptime tracker
-		uptimeTracker := miner.NewUptimeTracker(w, storage, beaconManager)
-		uptimeTracker.LoadHeartbeats()
-
-		// Create and start API server
-		server := api.NewServer(blockchain, uptimeTracker, w, storage, *apiPort)
-
-		fmt.Printf("Starting TruthChain API server on port %d...\n", *apiPort)
-		fmt.Printf("API endpoints:\n")
-		fmt.Printf("  GET  http://127.0.0.1:%d/status\n", *apiPort)
-		fmt.Printf("  GET  http://127.0.0.1:%d/wallet\n", *apiPort)
-		fmt.Printf("  POST http://127.0.0.1:%d/post\n", *apiPort)
-		fmt.Printf("  GET  http://127.0.0.1:%d/posts/latest\n", *apiPort)
-		fmt.Printf("  POST http://127.0.0.1:%d/characters/send\n", *apiPort)
-		fmt.Printf("  GET  http://127.0.0.1:%d/uptime\n", *apiPort)
-		fmt.Printf("  GET  http://127.0.0.1:%d/balance\n", *apiPort)
-		fmt.Println()
-
-		if err := server.Start(); err != nil {
-			log.Fatalf("API server failed: %v", err)
+	if config.BeaconMode {
+		if err := node.initializeBeacon(); err != nil {
+			return nil, fmt.Errorf("failed to initialize beacon: %w", err)
 		}
-		return
 	}
 
-	// Handle sync operations
-	if *syncFrom != "" {
-		fmt.Printf("Syncing blocks from peer: %s\n", *syncFrom)
-
-		// Get current chain length
-		currentLength, err := blockchain.GetChainLength()
-		if err != nil {
-			log.Fatalf("Failed to get chain length: %v", err)
+	if config.MiningMode {
+		if err := node.initializeMiner(); err != nil {
+			return nil, fmt.Errorf("failed to initialize miner: %w", err)
 		}
-
-		// Request blocks from current length onwards
-		resp, err := network.SyncFromPeerTCP(*syncFrom, currentLength, -1, w.GetAddress())
-		if err != nil {
-			log.Fatalf("Failed to sync from peer: %v", err)
-		}
-
-		fmt.Printf("Received %d blocks from peer\n", len(resp.Blocks))
-		fmt.Printf("Blocks range: %d to %d\n", resp.FromIndex, resp.ToIndex)
-
-		// Integrate blocks using the blockchain's sync integration method
-		startTime := time.Now()
-		blocksAdded, blocksSkipped, err := blockchain.IntegrateBlocksFromSync(resp.Blocks)
-		if err != nil {
-			log.Fatalf("Failed to integrate blocks: %v", err)
-		}
-
-		duration := time.Since(startTime)
-		fmt.Printf("✅ Sync completed successfully!\n")
-		fmt.Printf("  Blocks added: %d\n", blocksAdded)
-		fmt.Printf("  Blocks skipped: %d\n", blocksSkipped)
-		fmt.Printf("  Duration: %v\n", duration)
-
-		// Show integrated blocks
-		for _, block := range resp.Blocks {
-			fmt.Printf("  Block %d: %d posts, %d characters\n",
-				block.Index, len(block.Posts), block.CharCount)
-		}
-		return
 	}
 
-	// Start sync server if requested
-	if *syncPort > 0 {
-		fmt.Printf("Starting sync server on port %d...\n", *syncPort)
-		fmt.Printf("Other nodes can sync from: %s:%d\n",
-			getLocalIP(), *syncPort)
+	// Setup API routes if enabled
+	if config.APIMode {
+		node.setupAPIRoutes()
+	}
 
-		// Start sync server in background
+	return node, nil
+}
+
+// initializeMesh sets up the mesh network manager
+func (n *TruthChainNode) initializeMesh() error {
+	if n.trustNetwork == nil {
+		return fmt.Errorf("trust network not initialized")
+	}
+	return n.trustNetwork.Start()
+}
+
+// initializeBeacon sets up the beacon manager
+func (n *TruthChainNode) initializeBeacon() error {
+	// Convert btcec keys to ecdsa keys
+	privateKey := n.wallet.PrivateKey.ToECDSA()
+	publicKey := n.wallet.PublicKey.ToECDSA()
+
+	beacon := network.NewBeaconManager(privateKey, publicKey)
+
+	// Enable beacon mode if domain is provided
+	if n.config.Domain != "" {
+		beacon.EnableBeacon(n.config.Domain, n.config.MeshPort)
+	}
+
+	n.beacon = beacon
+	return nil
+}
+
+// initializeMiner sets up the uptime miner
+func (n *TruthChainNode) initializeMiner() error {
+	beaconChecker := &beaconCheckerAdapter{beacon: n.beacon}
+	miner := miner.NewUptimeTracker(n.wallet, n.storage, beaconChecker)
+	n.miner = miner
+	// Attach miner to trust network for uptime tracking
+	if n.trustNetwork != nil {
+		n.trustNetwork.UptimeTracker = miner
+	}
+	return nil
+}
+
+// beaconCheckerAdapter adapts BeaconManager to BeaconChecker interface
+type beaconCheckerAdapter struct {
+	beacon *network.BeaconManager
+}
+
+func (bca *beaconCheckerAdapter) IsBeaconMode() bool {
+	if bca.beacon == nil {
+		return false
+	}
+	return bca.beacon.IsBeaconMode()
+}
+
+func (bca *beaconCheckerAdapter) GetBeaconUptime() float64 {
+	if bca.beacon == nil {
+		return 0.0
+	}
+	return bca.beacon.GetBeaconUptime()
+}
+
+// setupAPIRoutes configures the API endpoints
+func (n *TruthChainNode) setupAPIRoutes() {
+	// Health and status endpoints
+	n.router.HandleFunc("/status", n.handleStatus).Methods("GET")
+	n.router.HandleFunc("/health", n.handleHealth).Methods("GET")
+	n.router.HandleFunc("/info", n.handleInfo).Methods("GET")
+
+	// Blockchain endpoints
+	n.router.HandleFunc("/blockchain/latest", n.handleLatestBlock).Methods("GET")
+	n.router.HandleFunc("/blockchain/length", n.handleChainLength).Methods("GET")
+
+	// Post endpoints
+	n.router.HandleFunc("/posts", n.handleCreatePost).Methods("POST")
+	n.router.HandleFunc("/posts/pending", n.handleGetPendingPosts).Methods("GET")
+
+	// Transfer endpoints
+	n.router.HandleFunc("/transfers", n.handleCreateTransfer).Methods("POST")
+	n.router.HandleFunc("/transfers/pending", n.handleGetPendingTransfers).Methods("GET")
+
+	// Wallet endpoints
+	n.router.HandleFunc("/wallets", n.handleGetWallets).Methods("GET")
+	n.router.HandleFunc("/wallets/{address}", n.handleGetWallet).Methods("GET")
+	n.router.HandleFunc("/wallets/{address}/balance", n.handleGetBalance).Methods("GET")
+
+	// Network endpoints
+	n.router.HandleFunc("/network/stats", n.handleNetworkStats).Methods("GET")
+	n.router.HandleFunc("/network/peers", n.handleGetPeers).Methods("GET")
+
+	// Add CORS headers
+	n.router.Use(n.corsMiddleware)
+}
+
+// Start begins the TruthChain node
+func (n *TruthChainNode) Start() error {
+	if n.isRunning {
+		return fmt.Errorf("node is already running")
+	}
+
+	n.isRunning = true
+	log.Printf("Starting TruthChain node...")
+
+	// Start mesh network if enabled
+	if n.trustNetwork != nil {
+		if err := n.trustNetwork.Start(); err != nil {
+			return fmt.Errorf("failed to start trust network: %w", err)
+		}
+		log.Printf("Trust network started")
+	}
+
+	// Start miner if enabled
+	if n.miner != nil {
+		if err := n.miner.Start(); err != nil {
+			return fmt.Errorf("failed to start miner: %w", err)
+		}
+		log.Printf("Uptime miner started")
+	}
+
+	// Start API server if enabled
+	if n.config.APIMode {
 		go func() {
-			if err := network.StartSyncServer(fmt.Sprintf(":%d", *syncPort), blockchain, w.GetAddress()); err != nil {
-				log.Printf("Sync server failed: %v", err)
+			if err := n.apiServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+				log.Printf("API server error: %v", err)
 			}
 		}()
+		log.Printf("API server started on port %d", n.config.APIPort)
 	}
 
-	// Start mesh network if requested
-	if *meshMode {
-		fmt.Printf("Starting mesh network on port %d...\n", *meshPort)
-		fmt.Printf("Mesh network address: %s:%d\n", getLocalIP(), *meshPort)
+	log.Printf("TruthChain node started successfully")
+	log.Printf("Wallet address: %s", n.wallet.GetAddress())
+	log.Printf("Network: %s", n.config.NetworkID)
+	log.Printf("Post threshold: %d", n.config.PostThreshold)
 
-		// Initialize uptime tracker for mesh network
-		uptimeTracker := miner.NewUptimeTracker(w, storage, beaconManager)
-		uptimeTracker.LoadHeartbeats()
+	return nil
+}
 
-		// Create trust network with bootstrap
-		trustNetwork := network.NewTrustNetwork(
-			w.GetAddress(),
-			w,
-			storage,
-			uptimeTracker,
-			blockchain,
-			*meshPort,
-			*bootstrapConfig, // Bootstrap config file
-		)
-
-		// Start trust network
-		if err := trustNetwork.Start(); err != nil {
-			log.Fatalf("Failed to start trust network: %v", err)
-		}
-
-		// Create and start mesh sync manager
-		meshSyncManager := network.NewMeshSyncManager(trustNetwork, blockchain)
-		if err := meshSyncManager.Start(); err != nil {
-			log.Fatalf("Failed to start mesh sync manager: %v", err)
-		}
-
-		// Discover peers from beacons
-		if err := meshSyncManager.DiscoverPeersFromBeacons(); err != nil {
-			log.Printf("Warning: Failed to discover peers from beacons: %v", err)
-		}
-
-		fmt.Printf("✅ Mesh network started successfully!\n")
-		fmt.Printf("  Node ID: %s\n", w.GetAddress())
-		fmt.Printf("  Mesh Port: %d\n", *meshPort)
-		fmt.Printf("  Beacon Mode: %t\n", *beaconMode)
-
-		// Keep the mesh network running
-		select {}
+// Stop gracefully shuts down the TruthChain node
+func (n *TruthChainNode) Stop() error {
+	if !n.isRunning {
+		return fmt.Errorf("node is not running")
 	}
 
-	// Normal node startup (no specific command)
-	fmt.Printf("TruthChain node starting...\n")
-	fmt.Printf("Wallet Address: %s\n", w.GetAddress())
-	fmt.Printf("Wallet File: %s\n", *walletPath)
-	fmt.Printf("Database File: %s\n", *dbPath)
-	fmt.Printf("Network: %s\n", w.GetNetwork())
-	fmt.Printf("Post Threshold: %d\n", *postThreshold)
+	log.Printf("Stopping TruthChain node...")
+	n.isRunning = false
 
-	if *debug {
-		fmt.Printf("Public Key (compressed): %s\n", w.ExportPublicKeyHex())
-		fmt.Printf("Version Byte: 0x%02X\n", w.GetVersionByte())
-		fmt.Printf("Address Valid: %t\n", wallet.ValidateAddressWithVersion(w.GetAddress(), w.GetVersionByte()))
+	// Close stop channel
+	close(n.stopChan)
+
+	// Stop miner if running
+	if n.miner != nil {
+		n.miner.Stop()
 	}
 
-	// Show blockchain status
-	info, err := blockchain.GetBlockchainInfo()
+	// Stop trust network if running
+	if n.trustNetwork != nil {
+		n.trustNetwork.Stop()
+	}
+
+	// Shutdown API server if running
+	if n.config.APIMode {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+
+		if err := n.apiServer.Shutdown(ctx); err != nil {
+			log.Printf("Warning: failed to shutdown API server: %v", err)
+		}
+	}
+
+	// Close blockchain and storage
+	if err := n.blockchain.Close(); err != nil {
+		log.Printf("Warning: failed to close blockchain: %v", err)
+	}
+
+	if err := n.storage.Close(); err != nil {
+		log.Printf("Warning: failed to close storage: %v", err)
+	}
+
+	log.Printf("TruthChain node stopped")
+	return nil
+}
+
+// API handlers
+func (n *TruthChainNode) handleStatus(w http.ResponseWriter, r *http.Request) {
+	info, err := n.blockchain.GetBlockchainInfo()
 	if err != nil {
-		log.Fatalf("Failed to get blockchain info: %v", err)
+		http.Error(w, "Failed to get blockchain info", http.StatusInternalServerError)
+		return
 	}
 
-	fmt.Printf("Blockchain Status:\n")
-	fmt.Printf("  Chain Length: %v\n", info["chain_length"])
-	fmt.Printf("  Pending Posts: %v\n", info["pending_post_count"])
-	fmt.Printf("  Pending Characters: %v/%v\n", info["pending_character_count"], info["character_threshold"])
+	response := map[string]interface{}{
+		"status":     "running",
+		"timestamp":  time.Now().Unix(),
+		"blockchain": info,
+		"node": map[string]interface{}{
+			"address":     n.wallet.GetAddress(),
+			"network":     n.config.NetworkID,
+			"beacon_mode": n.config.BeaconMode,
+			"mesh_mode":   n.config.MeshMode,
+			"mining_mode": n.config.MiningMode,
+			"api_mode":    n.config.APIMode,
+		},
+	}
 
-	// Show available features
-	fmt.Println("\nAvailable Features:")
-	fmt.Println("  ✅ Wallet Management")
-	fmt.Println("  ✅ Blockchain Operations")
-	fmt.Println("  ✅ Post Creation & Management")
-	fmt.Println("  ✅ Character Transfer System")
-	fmt.Println("  ✅ Uptime Mining & Rewards")
-	fmt.Println("  ✅ HTTP API Server")
-	fmt.Println("  ✅ Live Monitoring Dashboard")
-	fmt.Println("  ✅ Chain Synchronization")
-	fmt.Println("  ✅ Mesh Network (Decentralized)")
-	fmt.Println("  ✅ Beacon Discovery")
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(response)
+}
 
-	fmt.Println("\nTo start the HTTP API server:")
-	fmt.Printf("  go run cmd/main.go --api-port 8080\n")
-	fmt.Println("\nTo view live node stats:")
-	fmt.Printf("  go run cmd/main.go --monitor\n")
-	fmt.Println("\nTo sync from a peer:")
-	fmt.Printf("  go run cmd/main.go --sync-from 192.168.1.100:9876\n")
-	fmt.Println("\nTo start mesh network mode:")
-	fmt.Printf("  go run cmd/main.go --mesh --mesh-port 9877\n")
-	fmt.Println("\nTo start beacon mode:")
-	fmt.Printf("  go run cmd/main.go --beacon --beacon-ip 192.168.1.100 --beacon-port 9876\n")
-	fmt.Println("\nUse --help to see all available commands.")
+func (n *TruthChainNode) handleHealth(w http.ResponseWriter, r *http.Request) {
+	response := map[string]interface{}{
+		"status":    "healthy",
+		"timestamp": time.Now().Unix(),
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(response)
+}
+
+func (n *TruthChainNode) handleInfo(w http.ResponseWriter, r *http.Request) {
+	info, err := n.blockchain.GetBlockchainInfo()
+	if err != nil {
+		http.Error(w, "Failed to get blockchain info", http.StatusInternalServerError)
+		return
+	}
+
+	response := map[string]interface{}{
+		"name":        "TruthChain",
+		"version":     "1.0.0",
+		"description": "Decentralized Truth Network",
+		"blockchain":  info,
+		"node": map[string]interface{}{
+			"address":     n.wallet.GetAddress(),
+			"network":     n.config.NetworkID,
+			"beacon_mode": n.config.BeaconMode,
+			"mesh_mode":   n.config.MeshMode,
+			"mining_mode": n.config.MiningMode,
+		},
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(response)
+}
+
+func (n *TruthChainNode) handleLatestBlock(w http.ResponseWriter, r *http.Request) {
+	block, err := n.blockchain.GetLatestBlock()
+	if err != nil {
+		http.Error(w, "Failed to get latest block", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(block)
+}
+
+func (n *TruthChainNode) handleChainLength(w http.ResponseWriter, r *http.Request) {
+	length, err := n.blockchain.GetChainLength()
+	if err != nil {
+		http.Error(w, "Failed to get chain length", http.StatusInternalServerError)
+		return
+	}
+
+	response := map[string]interface{}{
+		"length": length,
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(response)
+}
+
+func (n *TruthChainNode) handleCreatePost(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Content string `json:"content"`
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	post, err := n.blockchain.CreatePost(req.Content, n.wallet)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("Failed to create post: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(post)
+}
+
+func (n *TruthChainNode) handleGetPendingPosts(w http.ResponseWriter, r *http.Request) {
+	posts := n.blockchain.GetPendingPosts()
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(posts)
+}
+
+func (n *TruthChainNode) handleCreateTransfer(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		To     string `json:"to"`
+		Amount int    `json:"amount"`
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	transfer, err := n.blockchain.CreateTransfer(req.To, req.Amount, n.wallet)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("Failed to create transfer: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(transfer)
+}
+
+func (n *TruthChainNode) handleGetPendingTransfers(w http.ResponseWriter, r *http.Request) {
+	poolInfo := n.blockchain.GetTransferPoolInfo()
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(poolInfo)
+}
+
+func (n *TruthChainNode) handleGetWallets(w http.ResponseWriter, r *http.Request) {
+	stateInfo := n.blockchain.GetStateInfo()
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(stateInfo)
+}
+
+func (n *TruthChainNode) handleGetWallet(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	address := vars["address"]
+
+	balance, err := n.blockchain.GetCharacterBalance(address)
+	if err != nil {
+		http.Error(w, "Wallet not found", http.StatusNotFound)
+		return
+	}
+
+	response := map[string]interface{}{
+		"address": address,
+		"balance": balance,
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(response)
+}
+
+func (n *TruthChainNode) handleGetBalance(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	address := vars["address"]
+
+	balance, err := n.blockchain.GetCharacterBalance(address)
+	if err != nil {
+		http.Error(w, "Wallet not found", http.StatusNotFound)
+		return
+	}
+
+	response := map[string]interface{}{
+		"address": address,
+		"balance": balance,
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(response)
+}
+
+func (n *TruthChainNode) handleNetworkStats(w http.ResponseWriter, r *http.Request) {
+	response := map[string]interface{}{
+		"mesh_enabled":   n.trustNetwork != nil,
+		"beacon_enabled": n.beacon != nil,
+		"mining_enabled": n.miner != nil,
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(response)
+}
+
+func (n *TruthChainNode) handleGetPeers(w http.ResponseWriter, r *http.Request) {
+	response := map[string]interface{}{
+		"status": "peers_not_available",
+		"note":   "Peer list requires active trust network connection",
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(response)
+}
+
+func (n *TruthChainNode) corsMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
+
+		if r.Method == "OPTIONS" {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+
+		next.ServeHTTP(w, r)
+	})
+}
+
+func printHelp() {
+	fmt.Println("TruthChain Node")
+	fmt.Println("Usage: truthchain [options]")
+	fmt.Println()
+	fmt.Println("Options:")
+	flag.PrintDefaults()
+	fmt.Println()
+	fmt.Println("Examples:")
+	fmt.Println("  # Run full node with API")
+	fmt.Println("  truthchain -beacon -mesh -mining -api")
+	fmt.Println()
+	fmt.Println("  # Run beacon node only")
+	fmt.Println("  truthchain -beacon -domain mainnet.truth-chain.org")
+	fmt.Println()
+	fmt.Println("  # Run mesh node only")
+	fmt.Println("  truthchain -mesh")
+	fmt.Println()
+	fmt.Println("  # Run with custom database")
+	fmt.Println("  truthchain -db /path/to/truthchain.db")
 }

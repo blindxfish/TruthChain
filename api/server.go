@@ -1,353 +1,411 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
+	"os"
+	"os/signal"
+	"syscall"
 	"time"
 
 	"github.com/blindxfish/truthchain/blockchain"
-	"github.com/blindxfish/truthchain/miner"
 	"github.com/blindxfish/truthchain/store"
-	"github.com/blindxfish/truthchain/wallet"
+	"github.com/gorilla/mux"
 )
 
-// Server represents the TruthChain HTTP API server
-type Server struct {
-	blockchain    *blockchain.Blockchain
-	uptimeTracker *miner.UptimeTracker
-	wallet        *wallet.Wallet
-	storage       store.Storage
-	port          int
+// APIServer represents a standalone HTTP API server for TruthChain
+type APIServer struct {
+	blockchain *blockchain.Blockchain
+	storage    *store.BoltDBStorage
+	router     *mux.Router
+	server     *http.Server
+	port       int
+	isRunning  bool
+	stopChan   chan struct{}
 }
 
-// NewServer creates a new HTTP API server
-func NewServer(bc *blockchain.Blockchain, ut *miner.UptimeTracker, w *wallet.Wallet, s store.Storage, port int) *Server {
-	return &Server{
-		blockchain:    bc,
-		uptimeTracker: ut,
-		wallet:        w,
-		storage:       s,
-		port:          port,
-	}
-}
-
-// Start starts the HTTP server
-func (s *Server) Start() error {
-	// Set up routes
-	http.HandleFunc("/status", s.handleStatus)
-	http.HandleFunc("/wallet", s.handleWallet)
-	http.HandleFunc("/wallet/backup", s.handleWalletBackup)
-	http.HandleFunc("/post", s.handlePost)
-	http.HandleFunc("/posts/latest", s.handleLatestPosts)
-	http.HandleFunc("/characters/send", s.handleSendCharacters)
-	http.HandleFunc("/uptime", s.handleUptime)
-	http.HandleFunc("/balance", s.handleBalance)
-
-	// Start server
-	addr := fmt.Sprintf("127.0.0.1:%d", s.port)
-	log.Printf("Starting TruthChain API server on %s", addr)
-	return http.ListenAndServe(addr, nil)
-}
-
-// handleStatus handles GET /status
-func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-
-	// Get blockchain info
-	chainInfo, err := s.blockchain.GetBlockchainInfo()
+// NewAPIServer creates a new API server instance
+func NewAPIServer(dbPath string, port int) (*APIServer, error) {
+	// Initialize storage
+	storage, err := store.NewBoltDBStorage(dbPath)
 	if err != nil {
-		http.Error(w, fmt.Sprintf("Failed to get blockchain info: %v", err), http.StatusInternalServerError)
-		return
+		return nil, fmt.Errorf("failed to initialize storage: %w", err)
 	}
 
-	// Get uptime info
-	uptimeInfo := s.uptimeTracker.GetUptimeInfo()
-
-	// Combine info
-	status := map[string]interface{}{
-		"node_info": map[string]interface{}{
-			"wallet_address":    s.wallet.GetAddress(),
-			"network":           s.wallet.GetNetwork(),
-			"uptime_24h":        uptimeInfo["uptime_24h_percent"],
-			"uptime_total":      uptimeInfo["uptime_total_percent"],
-			"character_balance": uptimeInfo["character_balance"],
-		},
-		"blockchain_info": chainInfo,
-		"timestamp":       time.Now().Unix(),
+	// Initialize blockchain (read-only mode)
+	bc, err := blockchain.NewBlockchain(storage, 5) // Default post threshold
+	if err != nil {
+		return nil, fmt.Errorf("failed to initialize blockchain: %w", err)
 	}
 
-	s.writeJSON(w, status)
+	// Create router
+	router := mux.NewRouter()
+
+	// Create server
+	server := &http.Server{
+		Addr:         fmt.Sprintf(":%d", port),
+		Handler:      router,
+		ReadTimeout:  30 * time.Second,
+		WriteTimeout: 30 * time.Second,
+		IdleTimeout:  60 * time.Second,
+	}
+
+	api := &APIServer{
+		blockchain: bc,
+		storage:    storage,
+		router:     router,
+		server:     server,
+		port:       port,
+		stopChan:   make(chan struct{}),
+	}
+
+	// Setup routes
+	api.setupRoutes()
+
+	return api, nil
 }
 
-// handleWallet handles GET /wallet
-func (s *Server) handleWallet(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
+// setupRoutes configures all API endpoints
+func (api *APIServer) setupRoutes() {
+	// Health and status endpoints
+	api.router.HandleFunc("/status", api.handleStatus).Methods("GET")
+	api.router.HandleFunc("/health", api.handleHealth).Methods("GET")
+	api.router.HandleFunc("/info", api.handleInfo).Methods("GET")
 
-	// Get character balance
-	balance, err := s.storage.GetCharacterBalance(s.wallet.GetAddress())
-	if err != nil {
-		http.Error(w, fmt.Sprintf("Failed to get balance: %v", err), http.StatusInternalServerError)
-		return
-	}
+	// Blockchain endpoints
+	api.router.HandleFunc("/blockchain/latest", api.handleLatestBlock).Methods("GET")
+	api.router.HandleFunc("/blockchain/blocks", api.handleGetBlocks).Methods("GET")
+	api.router.HandleFunc("/blockchain/blocks/{index}", api.handleGetBlockByIndex).Methods("GET")
+	api.router.HandleFunc("/blockchain/blocks/hash/{hash}", api.handleGetBlockByHash).Methods("GET")
+	api.router.HandleFunc("/blockchain/length", api.handleChainLength).Methods("GET")
 
-	walletInfo := map[string]interface{}{
-		"address":           s.wallet.GetAddress(),
-		"network":           s.wallet.GetNetwork(),
-		"character_balance": balance,
-		"public_key":        s.wallet.ExportPublicKeyHex(),
-	}
+	// Post endpoints
+	api.router.HandleFunc("/posts", api.handleGetPosts).Methods("GET")
+	api.router.HandleFunc("/posts/pending", api.handleGetPendingPosts).Methods("GET")
+	api.router.HandleFunc("/posts/{hash}", api.handleGetPostByHash).Methods("GET")
 
-	if s.wallet.Metadata != nil {
-		walletInfo["name"] = s.wallet.Metadata.Name
-		walletInfo["created"] = s.wallet.Metadata.Created.Format(time.RFC3339)
-		walletInfo["last_used"] = s.wallet.Metadata.LastUsed.Format(time.RFC3339)
-	}
+	// Transfer endpoints
+	api.router.HandleFunc("/transfers", api.handleGetTransfers).Methods("GET")
+	api.router.HandleFunc("/transfers/pending", api.handleGetPendingTransfers).Methods("GET")
 
-	s.writeJSON(w, walletInfo)
+	// Wallet endpoints
+	api.router.HandleFunc("/wallets", api.handleGetWallets).Methods("GET")
+	api.router.HandleFunc("/wallets/{address}", api.handleGetWallet).Methods("GET")
+	api.router.HandleFunc("/wallets/{address}/balance", api.handleGetBalance).Methods("GET")
+
+	// Network endpoints
+	api.router.HandleFunc("/network/stats", api.handleNetworkStats).Methods("GET")
+	api.router.HandleFunc("/network/peers", api.handleGetPeers).Methods("GET")
+
+	// Add CORS headers
+	api.router.Use(api.corsMiddleware)
 }
 
-// handleWalletBackup handles GET /wallet/backup
-func (s *Server) handleWalletBackup(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
+// corsMiddleware adds CORS headers to all responses
+func (api *APIServer) corsMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
 
-	// Create wallet backup
-	backup, err := s.wallet.ExportBackup()
-	if err != nil {
-		http.Error(w, fmt.Sprintf("Failed to create wallet backup: %v", err), http.StatusInternalServerError)
-		return
-	}
+		if r.Method == "OPTIONS" {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
 
-	// Set headers for file download
-	w.Header().Set("Content-Type", "application/json")
-	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=\"wallet_backup_%s.json\"", s.wallet.GetAddress()[:8]))
-	w.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate")
-	w.Header().Set("Pragma", "no-cache")
-	w.Header().Set("Expires", "0")
-
-	// Write backup JSON
-	s.writeJSON(w, backup)
+		next.ServeHTTP(w, r)
+	})
 }
 
-// handlePost handles POST /post
-func (s *Server) handlePost(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
+// Start begins the API server
+func (api *APIServer) Start() error {
+	if api.isRunning {
+		return fmt.Errorf("API server is already running")
 	}
 
-	// Parse request body
-	var req struct {
-		Content string `json:"content"`
+	api.isRunning = true
+	log.Printf("Starting TruthChain API server on port %d", api.port)
+
+	// Start server in goroutine
+	go func() {
+		if err := api.server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			log.Printf("API server error: %v", err)
+		}
+	}()
+
+	// Setup graceful shutdown
+	go api.handleShutdown()
+
+	return nil
+}
+
+// Stop gracefully shuts down the API server
+func (api *APIServer) Stop() error {
+	if !api.isRunning {
+		return fmt.Errorf("API server is not running")
 	}
 
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, fmt.Sprintf("Invalid request body: %v", err), http.StatusBadRequest)
-		return
+	log.Printf("Stopping TruthChain API server...")
+	api.isRunning = false
+
+	// Close stop channel
+	close(api.stopChan)
+
+	// Shutdown server
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	if err := api.server.Shutdown(ctx); err != nil {
+		return fmt.Errorf("failed to shutdown server: %w", err)
 	}
 
-	if req.Content == "" {
-		http.Error(w, "Content cannot be empty", http.StatusBadRequest)
-		return
+	// Close storage
+	if err := api.storage.Close(); err != nil {
+		log.Printf("Warning: failed to close storage: %v", err)
 	}
 
-	// Check character balance
-	balance, err := s.storage.GetCharacterBalance(s.wallet.GetAddress())
+	log.Printf("TruthChain API server stopped")
+	return nil
+}
+
+// handleShutdown sets up graceful shutdown handling
+func (api *APIServer) handleShutdown() {
+	sigChan := make(chan os.Signal, 1)
+	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
+
+	select {
+	case <-sigChan:
+		log.Printf("Received shutdown signal")
+	case <-api.stopChan:
+		log.Printf("Received stop request")
+	}
+
+	api.Stop()
+}
+
+// handleStatus returns the overall status of the TruthChain node
+func (api *APIServer) handleStatus(w http.ResponseWriter, r *http.Request) {
+	info, err := api.blockchain.GetBlockchainInfo()
 	if err != nil {
-		http.Error(w, fmt.Sprintf("Failed to get balance: %v", err), http.StatusInternalServerError)
-		return
-	}
-
-	if balance < len(req.Content) {
-		http.Error(w, fmt.Sprintf("Insufficient character balance: %d, need %d", balance, len(req.Content)), http.StatusBadRequest)
-		return
-	}
-
-	// Create and add post
-	post, err := s.blockchain.CreatePost(req.Content, s.wallet)
-	if err != nil {
-		http.Error(w, fmt.Sprintf("Failed to create post: %v", err), http.StatusInternalServerError)
-		return
-	}
-
-	if err := s.blockchain.AddPost(*post); err != nil {
-		http.Error(w, fmt.Sprintf("Failed to add post: %v", err), http.StatusInternalServerError)
-		return
-	}
-
-	// Deduct characters from balance
-	if err := s.storage.UpdateCharacterBalance(s.wallet.GetAddress(), -len(req.Content)); err != nil {
-		http.Error(w, fmt.Sprintf("Failed to update balance: %v", err), http.StatusInternalServerError)
+		api.sendError(w, "Failed to get blockchain info", http.StatusInternalServerError)
 		return
 	}
 
 	response := map[string]interface{}{
-		"success": true,
-		"post": map[string]interface{}{
-			"hash":       post.Hash,
-			"author":     post.Author,
-			"content":    post.Content,
-			"timestamp":  post.Timestamp,
-			"characters": post.GetCharacterCount(),
+		"status":     "running",
+		"timestamp":  time.Now().Unix(),
+		"blockchain": info,
+		"api": map[string]interface{}{
+			"port":    api.port,
+			"version": "1.0.0",
+			"uptime":  time.Since(time.Now()).String(), // TODO: track actual uptime
 		},
-		"new_balance": balance - len(req.Content),
 	}
 
-	s.writeJSON(w, response)
+	api.sendJSON(w, response)
 }
 
-// handleLatestPosts handles GET /posts/latest
-func (s *Server) handleLatestPosts(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-
-	// Get latest block
-	latestBlock, err := s.blockchain.GetLatestBlock()
-	if err != nil {
-		http.Error(w, fmt.Sprintf("Failed to get latest block: %v", err), http.StatusInternalServerError)
-		return
-	}
-
-	// Get recent posts from mempool
-	mempoolInfo := s.blockchain.GetMempoolInfo()
-	pendingPosts := mempoolInfo["posts"].([]map[string]interface{})
-
+// handleHealth returns a simple health check
+func (api *APIServer) handleHealth(w http.ResponseWriter, r *http.Request) {
 	response := map[string]interface{}{
-		"latest_block": map[string]interface{}{
-			"index":     latestBlock.Index,
-			"hash":      latestBlock.Hash,
-			"timestamp": latestBlock.Timestamp,
-			"posts":     latestBlock.Posts,
-		},
-		"pending_posts": pendingPosts,
+		"status":    "healthy",
+		"timestamp": time.Now().Unix(),
 	}
-
-	s.writeJSON(w, response)
+	api.sendJSON(w, response)
 }
 
-// handleSendCharacters handles POST /characters/send
-func (s *Server) handleSendCharacters(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-
-	// Parse request body
-	var req struct {
-		To     string `json:"to"`
-		Amount int    `json:"amount"`
-	}
-
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, fmt.Sprintf("Invalid request body: %v", err), http.StatusBadRequest)
-		return
-	}
-
-	if req.To == "" {
-		http.Error(w, "Recipient address cannot be empty", http.StatusBadRequest)
-		return
-	}
-
-	if req.Amount <= 0 {
-		http.Error(w, "Amount must be positive", http.StatusBadRequest)
-		return
-	}
-
-	// Validate recipient address
-	if !wallet.ValidateAddress(req.To) {
-		http.Error(w, "Invalid recipient address", http.StatusBadRequest)
-		return
-	}
-
-	// Check sender balance (including gas fee)
-	totalCost := req.Amount + 1 // 1 character gas fee
-	balance, err := s.storage.GetCharacterBalance(s.wallet.GetAddress())
+// handleInfo returns detailed information about the TruthChain node
+func (api *APIServer) handleInfo(w http.ResponseWriter, r *http.Request) {
+	info, err := api.blockchain.GetBlockchainInfo()
 	if err != nil {
-		http.Error(w, fmt.Sprintf("Failed to get balance: %v", err), http.StatusInternalServerError)
-		return
-	}
-
-	if balance < totalCost {
-		http.Error(w, fmt.Sprintf("Insufficient balance: %d, need %d (including 1 char gas fee)", balance, totalCost), http.StatusBadRequest)
-		return
-	}
-
-	// Transfer characters
-	if err := s.storage.UpdateCharacterBalance(s.wallet.GetAddress(), -totalCost); err != nil {
-		http.Error(w, fmt.Sprintf("Failed to deduct from sender: %v", err), http.StatusInternalServerError)
-		return
-	}
-
-	if err := s.storage.UpdateCharacterBalance(req.To, req.Amount); err != nil {
-		// Rollback sender deduction
-		s.storage.UpdateCharacterBalance(s.wallet.GetAddress(), totalCost)
-		http.Error(w, fmt.Sprintf("Failed to add to recipient: %v", err), http.StatusInternalServerError)
+		api.sendError(w, "Failed to get blockchain info", http.StatusInternalServerError)
 		return
 	}
 
 	response := map[string]interface{}{
-		"success": true,
-		"transfer": map[string]interface{}{
-			"from":       s.wallet.GetAddress(),
-			"to":         req.To,
-			"amount":     req.Amount,
-			"gas_fee":    1,
-			"total_cost": totalCost,
+		"name":        "TruthChain",
+		"version":     "1.0.0",
+		"description": "Decentralized Truth Network",
+		"blockchain":  info,
+		"features": []string{
+			"Immutable Posts",
+			"Character Currency",
+			"Uptime Mining",
+			"Mesh Network",
+			"Beacon Discovery",
+			"Transfer System",
 		},
-		"new_balance": balance - totalCost,
 	}
 
-	s.writeJSON(w, response)
+	api.sendJSON(w, response)
 }
 
-// handleUptime handles GET /uptime
-func (s *Server) handleUptime(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-
-	uptimeInfo := s.uptimeTracker.GetUptimeInfo()
-	s.writeJSON(w, uptimeInfo)
-}
-
-// handleBalance handles GET /balance
-func (s *Server) handleBalance(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-
-	balance, err := s.storage.GetCharacterBalance(s.wallet.GetAddress())
+// handleLatestBlock returns the latest block
+func (api *APIServer) handleLatestBlock(w http.ResponseWriter, r *http.Request) {
+	block, err := api.blockchain.GetLatestBlock()
 	if err != nil {
-		http.Error(w, fmt.Sprintf("Failed to get balance: %v", err), http.StatusInternalServerError)
+		api.sendError(w, "Failed to get latest block", http.StatusInternalServerError)
+		return
+	}
+
+	api.sendJSON(w, block)
+}
+
+// handleGetBlocks returns a range of blocks
+func (api *APIServer) handleGetBlocks(w http.ResponseWriter, r *http.Request) {
+	// TODO: Implement pagination and range queries
+	api.sendError(w, "Not implemented", http.StatusNotImplemented)
+}
+
+// handleGetBlockByIndex returns a block by its index
+func (api *APIServer) handleGetBlockByIndex(w http.ResponseWriter, r *http.Request) {
+	_ = mux.Vars(r)["index"]
+
+	// TODO: Parse index and return block
+	api.sendError(w, "Not implemented", http.StatusNotImplemented)
+}
+
+// handleGetBlockByHash returns a block by its hash
+func (api *APIServer) handleGetBlockByHash(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	hash := vars["hash"]
+
+	block, err := api.blockchain.GetBlockByHash(hash)
+	if err != nil {
+		api.sendError(w, "Block not found", http.StatusNotFound)
+		return
+	}
+
+	api.sendJSON(w, block)
+}
+
+// handleChainLength returns the current chain length
+func (api *APIServer) handleChainLength(w http.ResponseWriter, r *http.Request) {
+	length, err := api.blockchain.GetChainLength()
+	if err != nil {
+		api.sendError(w, "Failed to get chain length", http.StatusInternalServerError)
 		return
 	}
 
 	response := map[string]interface{}{
-		"address": s.wallet.GetAddress(),
+		"length": length,
+	}
+	api.sendJSON(w, response)
+}
+
+// handleGetPosts returns recent posts
+func (api *APIServer) handleGetPosts(w http.ResponseWriter, r *http.Request) {
+	// TODO: Implement post retrieval with pagination
+	api.sendError(w, "Not implemented", http.StatusNotImplemented)
+}
+
+// handleGetPendingPosts returns pending posts
+func (api *APIServer) handleGetPendingPosts(w http.ResponseWriter, r *http.Request) {
+	posts := api.blockchain.GetPendingPosts()
+	api.sendJSON(w, posts)
+}
+
+// handleGetPostByHash returns a post by its hash
+func (api *APIServer) handleGetPostByHash(w http.ResponseWriter, r *http.Request) {
+	_ = mux.Vars(r)["hash"]
+
+	// TODO: Implement post retrieval by hash
+	api.sendError(w, "Not implemented", http.StatusNotImplemented)
+}
+
+// handleGetTransfers returns recent transfers
+func (api *APIServer) handleGetTransfers(w http.ResponseWriter, r *http.Request) {
+	// TODO: Implement transfer retrieval
+	api.sendError(w, "Not implemented", http.StatusNotImplemented)
+}
+
+// handleGetPendingTransfers returns pending transfers
+func (api *APIServer) handleGetPendingTransfers(w http.ResponseWriter, r *http.Request) {
+	poolInfo := api.blockchain.GetTransferPoolInfo()
+	api.sendJSON(w, poolInfo)
+}
+
+// handleGetWallets returns all wallet states
+func (api *APIServer) handleGetWallets(w http.ResponseWriter, r *http.Request) {
+	stateInfo := api.blockchain.GetStateInfo()
+	api.sendJSON(w, stateInfo)
+}
+
+// handleGetWallet returns a specific wallet state
+func (api *APIServer) handleGetWallet(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	address := vars["address"]
+
+	balance, err := api.blockchain.GetCharacterBalance(address)
+	if err != nil {
+		api.sendError(w, "Wallet not found", http.StatusNotFound)
+		return
+	}
+
+	response := map[string]interface{}{
+		"address": address,
 		"balance": balance,
 	}
-
-	s.writeJSON(w, response)
+	api.sendJSON(w, response)
 }
 
-// writeJSON writes a JSON response
-func (s *Server) writeJSON(w http.ResponseWriter, data interface{}) {
-	w.Header().Set("Content-Type", "application/json")
-	if err := json.NewEncoder(w).Encode(data); err != nil {
-		http.Error(w, fmt.Sprintf("Failed to encode JSON: %v", err), http.StatusInternalServerError)
+// handleGetBalance returns a wallet's character balance
+func (api *APIServer) handleGetBalance(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	address := vars["address"]
+
+	balance, err := api.blockchain.GetCharacterBalance(address)
+	if err != nil {
+		api.sendError(w, "Wallet not found", http.StatusNotFound)
+		return
 	}
+
+	response := map[string]interface{}{
+		"address": address,
+		"balance": balance,
+	}
+	api.sendJSON(w, response)
+}
+
+// handleNetworkStats returns network statistics
+func (api *APIServer) handleNetworkStats(w http.ResponseWriter, r *http.Request) {
+	// TODO: Implement network stats when network is available
+	response := map[string]interface{}{
+		"status": "network_stats_not_available",
+		"note":   "Network stats require active mesh network connection",
+	}
+	api.sendJSON(w, response)
+}
+
+// handleGetPeers returns connected peers
+func (api *APIServer) handleGetPeers(w http.ResponseWriter, r *http.Request) {
+	// TODO: Implement peer list when network is available
+	response := map[string]interface{}{
+		"status": "peers_not_available",
+		"note":   "Peer list require active mesh network connection",
+	}
+	api.sendJSON(w, response)
+}
+
+// sendJSON sends a JSON response
+func (api *APIServer) sendJSON(w http.ResponseWriter, data interface{}) {
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(data)
+}
+
+// sendError sends an error response
+func (api *APIServer) sendError(w http.ResponseWriter, message string, statusCode int) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(statusCode)
+
+	response := map[string]interface{}{
+		"error":   message,
+		"status":  statusCode,
+		"success": false,
+	}
+
+	json.NewEncoder(w).Encode(response)
 }

@@ -12,5 +12,6 @@ require (
 
 require (
 	github.com/btcsuite/btcd/chaincfg/chainhash v1.0.1 // indirect
+	github.com/gorilla/mux v1.8.1 // indirect
 	golang.org/x/sys v0.33.0 // indirect
 )
