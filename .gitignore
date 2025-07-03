@@ -17,6 +17,11 @@ bootstrap.json
 wallet.json
 *.key
 
+# Wallet and sensitive files
+YourWalletInfo.txt
+wallet.json.meta
+wallet-backup-*.json
+
 # IDE files
 .vscode/
 .idea/

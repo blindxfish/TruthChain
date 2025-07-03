@@ -334,6 +334,53 @@ func NewTestnetWallet(name string) (*Wallet, error) {
 	return NewWalletWithMetadata(name, TruthChainTestnetVersion)
 }
 
+// ImportFromPrivateKey creates a wallet from a hex-encoded private key
+func ImportFromPrivateKey(privateKeyHex string) (*Wallet, error) {
+	return ImportFromPrivateKeyWithMetadata(privateKeyHex, "", TruthChainMainnetVersion)
+}
+
+// ImportFromPrivateKeyWithMetadata creates a wallet from a hex-encoded private key with custom metadata
+func ImportFromPrivateKeyWithMetadata(privateKeyHex, name string, versionByte byte) (*Wallet, error) {
+	// Decode private key from hex
+	privateKeyBytes, err := hex.DecodeString(privateKeyHex)
+	if err != nil {
+		return nil, fmt.Errorf("failed to decode private key: %w", err)
+	}
+
+	// Validate private key length
+	if len(privateKeyBytes) != btcec.PrivKeyBytesLen {
+		return nil, fmt.Errorf("invalid private key length: expected %d bytes, got %d", btcec.PrivKeyBytesLen, len(privateKeyBytes))
+	}
+
+	// Create private key
+	privateKey, _ := btcec.PrivKeyFromBytes(privateKeyBytes)
+
+	// Determine network name based on version byte
+	network := "mainnet"
+	if versionByte == TruthChainTestnetVersion {
+		network = "testnet"
+	} else if versionByte == TruthChainMultisigVersion {
+		network = "multisig"
+	}
+
+	metadata := &WalletMetadata{
+		Name:        name,
+		Created:     time.Now(),
+		LastUsed:    time.Now(),
+		Network:     network,
+		VersionByte: versionByte,
+	}
+
+	wallet := &Wallet{
+		PrivateKey: privateKey,
+		PublicKey:  privateKey.PubKey(),
+		Address:    generateAddressWithVersion(privateKey.PubKey(), versionByte),
+		Metadata:   metadata,
+	}
+
+	return wallet, nil
+}
+
 // DeriveAddress derives a TruthChain address from a btcec public key
 func DeriveAddress(pub *btcec.PublicKey) string {
 	pubBytes := pub.SerializeCompressed()
