@@ -1,0 +1,212 @@
+TruthChain Network Design
+
+Overview
+
+TruthChain nodes form a decentralized mesh network for the purpose of propagating immutable posts and transfers. This document outlines a peer-to-peer (P2P) system inspired by internet routing protocols (e.g., BGP) with an emphasis on trust, uptime, and logical hop-based diversity.
+
+Objectives
+
+Ensure fast and resilient post/transfer propagation
+
+Build trust over time using node uptime and age
+
+Maintain logical diversity across the mesh using hop-based distance
+
+Avoid centralized reliance or local clustering
+
+Peer Connection Strategy
+
+Each node maintains a small number of connections (e.g., 3-10), chosen based on:
+
+Nearest Peer: Lowest latency or direct connection
+
+Most Trusted Peer: Node with the highest Trust Score (uptime + age)
+
+Most Distant Peer: Peer with the highest hop distance in the known network topology
+
+This ensures:
+
+Fast propagation via nearest peer
+
+Reliable data via trusted peer
+
+Topological diversity via distant peer
+
+Peer Scoring System
+
+Each peer is tracked using a struct:
+
+type Peer struct {
+    Address      string
+    LastSeen     int64
+    UptimeScore  float64  // normalized (0.0 - 1.0)
+    AgeScore     float64  // seconds since first seen
+    TrustScore   float64  // Composite of Uptime + Age
+    Latency      int      // measured in ms (optional fallback)
+    HopDistance  int      // number of logical hops from this node
+    Path         []string // peer routing path
+}
+
+Trust Score Calculation
+
+TrustScore = weighted sum of UptimeScore and AgeScore
+
+Example: TrustScore = 0.6 * UptimeScore + 0.4 * AgeScoreNormalized
+
+Hop-Based Distance
+
+Nodes track logical network topology through gossip-based peer exchanges. Each node maintains a routing-style map:
+
+map[string]Peer // address -> best known route
+
+Hop Tracking Example
+
+Each gossip packet includes reachable peers and their paths:
+
+{
+  "my_address": "nodeA",
+  "peers": [
+    {"address": "nodeB", "hop": 1},
+    {"address": "nodeC", "hop": 2, "via": "nodeB"},
+    {"address": "nodeD", "hop": 3, "via": "nodeC"}
+  ]
+}
+
+The receiver increments hops and updates their peer table accordingly.
+
+Gossip Protocol
+
+Periodically (e.g., every 30s), nodes send their known peers and distances
+
+Upon receipt, nodes update hop distances, deduplicate, and select peers
+
+Prevents echo chambers and helps form a logically global mesh
+
+Connection Selection
+
+Every node selects a fixed number of peers using the following:
+
+func SelectPeers(peers []Peer, count int) []Peer {
+    nearest := MinBy(peers, func(p Peer) int { return p.Latency })
+    oldest := MaxBy(peers, func(p Peer) float64 { return p.TrustScore })
+    distant := MaxBy(peers, func(p Peer) int { return p.HopDistance })
+    return Unique([nearest, oldest, distant])
+}
+
+Message Propagation
+
+Each post/transfer is broadcasted to connected peers
+
+Peers verify, store, and rebroadcast to their own peers (excluding sender)
+
+Duplicate prevention using content hashes
+
+Anti-Spam & Security
+
+Reject posts or transfers from peers with low TrustScores
+
+Rate limit misbehaving or unresponsive peers
+
+Penalize invalid data submissions
+
+Future Enhancements
+
+STUN/NAT traversal for better connectivity
+
+Integration with DHT for content location
+
+IPv6 support
+
+Path weighting for preferential forwarding
+
+Benefits
+
+Efficient and redundant data propagation
+
+Robust against regional failures
+
+Trust increases over time without central authority
+
+Mesh adapts to network topology
+
+TruthChain — Building a truthful, distributed world one character at a time.
+
+Network Discoverability
+
+🌐 TruthChain Beacon Node System
+✨ Overview
+A Beacon Node is a publicly discoverable, voluntarily advertised node in the TruthChain network. Beacons help with:
+
+Peer Discovery: New nodes can find stable nodes to connect to.
+
+Network Stability: Beacons are incentivized to remain online and reachable.
+
+Trust Scoring: Beacon nodes are rewarded with more character allowance.
+
+🔐 Beacon Declaration
+To become a beacon, a node:
+
+Opts in via its config (e.g., --beacon or beacon: true in config file).
+
+Shares its public IP/domain + port in a special message.
+
+Signs the Beacon declaration with its private key to prove ownership.
+
+Broadcasts the BeaconAnnounce in a transaction.
+
+📄 BeaconAnnounce Structure (Minted into Block)
+json
+Copy
+Edit
+{
+  "type": "beacon_announce",
+  "payload": {
+    "node_id": "04ab...1234",       // Public key of the node
+    "ip": "beacon.truthchain.org",  // Domain or IP (IPv4/IPv6)
+    "port": 9876,                   // Listening port
+    "timestamp": 1723982301,        // UNIX time of declaration
+    "uptime": 99.32,                // Reported uptime %
+    "version": "v1.0.0",            // Optional node version string
+    "sig": "3045...ffac"            // Signature of payload with node's private key
+  }
+}
+🔄 Validation Rules
+Nodes receiving a beacon_announce must:
+
+Verify the signature using the node_id public key.
+
+Check that the IP is reachable and port open (optional but encouraged).
+
+Store it in a Beacon List with last_seen, uptime, etc.
+
+Limit to 1 beacon announce per node per 12h (anti-spam).
+
+📦 Block Integration
+When minting a block, a node can include one beacon_announce message in the block’s transactions. The rest of the network:
+
+Verifies the signature and format.
+
+Adds the Beacon node to the peer pool.
+
+Boosts its TrustScore over time.
+
+📡 Use in Peer Discovery
+When a new node boots up:
+
+Scans recent blocks for beacon_announce entries.
+
+Extracts IPs/domains and attempts to connect.
+
+Upon successful sync, it:
+
+Joins the mesh.
+
+Propagates itself through gossips and pings.
+
+💰 Incentive: Character Boost
+Beacon nodes receive a reward:
+
++50% character allowance per post/block while acting as a verified beacon.
+
+This makes beaconing attractive to high-reputation entities (news agencies, open data publishers, etc.)
+

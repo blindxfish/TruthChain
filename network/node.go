@@ -1,0 +1,512 @@
+package network
+
+import (
+	"fmt"
+	"log"
+	"sync"
+	"time"
+
+	"github.com/blindxfish/truthchain/chain"
+	"github.com/blindxfish/truthchain/miner"
+	"github.com/blindxfish/truthchain/store"
+	"github.com/blindxfish/truthchain/wallet"
+)
+
+// TrustNetwork represents a TruthChain node in the trust-based network
+type TrustNetwork struct {
+	NodeID        string
+	Wallet        *wallet.Wallet
+	Storage       *store.BoltDBStorage
+	UptimeTracker *miner.UptimeTracker
+
+	// Network components
+	TrustEngine   *TrustEngine
+	Topology      *NetworkTopology
+	MessageRouter *MessageRouter
+
+	// Configuration
+	ListenPort    int
+	MaxPeers      int
+	MinTrustScore float64
+
+	// State
+	IsRunning bool
+	mu        sync.RWMutex
+
+	// Channels
+	MessageChan chan NetworkMessage
+	PeerChan    chan PeerEvent
+	StopChan    chan struct{}
+}
+
+// NetworkMessage represents a message sent through the network
+type NetworkMessage struct {
+	Type      MessageType
+	Source    string
+	Payload   interface{}
+	Timestamp int64
+	TTL       int
+}
+
+// MessageType defines the type of network message
+type MessageType int
+
+const (
+	MessageTypeGossip MessageType = iota
+	MessageTypePost
+	MessageTypeTransfer
+	MessageTypeBlock
+	MessageTypePing
+	MessageTypePong
+)
+
+// PeerEvent represents peer-related events
+type PeerEvent struct {
+	Type   PeerEventType
+	Peer   *Peer
+	Reason string
+}
+
+// PeerEventType defines the type of peer event
+type PeerEventType int
+
+const (
+	PeerEventConnected PeerEventType = iota
+	PeerEventDisconnected
+	PeerEventTrustUpdated
+	PeerEventLatencyUpdated
+)
+
+// NewTrustNetwork creates a new trust-based network node
+func NewTrustNetwork(
+	nodeID string,
+	wallet *wallet.Wallet,
+	storage *store.BoltDBStorage,
+	uptimeTracker *miner.UptimeTracker,
+	listenPort int,
+) *TrustNetwork {
+
+	network := &TrustNetwork{
+		NodeID:        nodeID,
+		Wallet:        wallet,
+		Storage:       storage,
+		UptimeTracker: uptimeTracker,
+
+		TrustEngine:   NewTrustEngine(),
+		Topology:      NewNetworkTopology(nodeID),
+		MessageRouter: NewMessageRouter(),
+
+		ListenPort:    listenPort,
+		MaxPeers:      10,  // Default max 10 peers
+		MinTrustScore: 0.3, // Minimum trust score for connections
+
+		IsRunning:   false,
+		MessageChan: make(chan NetworkMessage, 100),
+		PeerChan:    make(chan PeerEvent, 50),
+		StopChan:    make(chan struct{}),
+	}
+
+	// Set up message router
+	network.MessageRouter.Network = network
+
+	return network
+}
+
+// Start begins the network node operation
+func (tn *TrustNetwork) Start() error {
+	tn.mu.Lock()
+	defer tn.mu.Unlock()
+
+	if tn.IsRunning {
+		return fmt.Errorf("network is already running")
+	}
+
+	tn.IsRunning = true
+
+	// Start background goroutines
+	go tn.gossipWorker()
+	go tn.peerManager()
+	go tn.messageProcessor()
+	go tn.trustUpdater()
+
+	log.Printf("TrustNetwork started on port %d", tn.ListenPort)
+	return nil
+}
+
+// Stop gracefully shuts down the network node
+func (tn *TrustNetwork) Stop() error {
+	tn.mu.Lock()
+	defer tn.mu.Unlock()
+
+	if !tn.IsRunning {
+		return fmt.Errorf("network is not running")
+	}
+
+	tn.IsRunning = false
+	close(tn.StopChan)
+
+	log.Printf("TrustNetwork stopped")
+	return nil
+}
+
+// AddPeer adds a new peer to the network
+func (tn *TrustNetwork) AddPeer(address string) (*Peer, error) {
+	tn.mu.Lock()
+	defer tn.mu.Unlock()
+
+	// Check if peer already exists
+	if _, exists := tn.Topology.Peers[address]; exists {
+		return nil, fmt.Errorf("peer %s already exists", address)
+	}
+
+	// Create new peer
+	peer := &Peer{
+		Address:      address,
+		FirstSeen:    time.Now().Unix(),
+		LastSeen:     time.Now().Unix(),
+		UptimeScore:  0.0, // Will be updated
+		AgeScore:     0.0, // Will be calculated
+		TrustScore:   0.0, // Will be calculated
+		Latency:      0,   // Will be measured
+		HopDistance:  0,   // Direct connection
+		Path:         []string{address},
+		IsConnected:  true,
+		ConnectionID: fmt.Sprintf("%s-%d", address, time.Now().Unix()),
+	}
+
+	// Calculate initial trust score
+	tn.TrustEngine.CalculateTrustScore(peer)
+
+	// Add to topology
+	tn.Topology.AddPeer(peer)
+
+	// Send peer event
+	tn.PeerChan <- PeerEvent{
+		Type: PeerEventConnected,
+		Peer: peer,
+	}
+
+	log.Printf("Added peer: %s (Trust: %.2f)", address, peer.TrustScore)
+	return peer, nil
+}
+
+// RemovePeer removes a peer from the network
+func (tn *TrustNetwork) RemovePeer(address string) error {
+	tn.mu.Lock()
+	defer tn.mu.Unlock()
+
+	peer, exists := tn.Topology.Peers[address]
+	if !exists {
+		return fmt.Errorf("peer %s not found", address)
+	}
+
+	// Send peer event
+	tn.PeerChan <- PeerEvent{
+		Type:   PeerEventDisconnected,
+		Peer:   peer,
+		Reason: "Manual removal",
+	}
+
+	// Remove from topology
+	tn.Topology.RemovePeer(address)
+
+	log.Printf("Removed peer: %s", address)
+	return nil
+}
+
+// BroadcastPost broadcasts a post to all connected peers
+func (tn *TrustNetwork) BroadcastPost(post *chain.Post) error {
+	tn.mu.RLock()
+	defer tn.mu.RUnlock()
+
+	if !tn.IsRunning {
+		return fmt.Errorf("network is not running")
+	}
+
+	// Create network message
+	msg := NetworkMessage{
+		Type:      MessageTypePost,
+		Source:    tn.NodeID,
+		Payload:   post,
+		Timestamp: time.Now().Unix(),
+		TTL:       10, // Allow up to 10 hops
+	}
+
+	// Send to message channel for processing
+	tn.MessageChan <- msg
+
+	log.Printf("Broadcasting post: %s", post.Hash)
+	return nil
+}
+
+// BroadcastTransfer broadcasts a transfer to all connected peers
+func (tn *TrustNetwork) BroadcastTransfer(transfer *chain.Transfer) error {
+	tn.mu.RLock()
+	defer tn.mu.RUnlock()
+
+	if !tn.IsRunning {
+		return fmt.Errorf("network is not running")
+	}
+
+	// Create network message
+	msg := NetworkMessage{
+		Type:      MessageTypeTransfer,
+		Source:    tn.NodeID,
+		Payload:   transfer,
+		Timestamp: time.Now().Unix(),
+		TTL:       10, // Allow up to 10 hops
+	}
+
+	// Send to message channel for processing
+	tn.MessageChan <- msg
+
+	log.Printf("Broadcasting transfer: %s", transfer.Hash)
+	return nil
+}
+
+// GetNetworkStats returns comprehensive network statistics
+func (tn *TrustNetwork) GetNetworkStats() map[string]interface{} {
+	tn.mu.RLock()
+	defer tn.mu.RUnlock()
+
+	topologyStats := tn.Topology.GetNetworkStats()
+
+	// Add trust engine stats
+	trustStats := map[string]interface{}{
+		"uptime_weight": tn.TrustEngine.UptimeWeight,
+		"age_weight":    tn.TrustEngine.AgeWeight,
+		"max_age":       tn.TrustEngine.MaxAge,
+	}
+
+	// Add peer details
+	peers := make([]map[string]interface{}, 0, len(tn.Topology.Peers))
+	for _, peer := range tn.Topology.Peers {
+		peerInfo := map[string]interface{}{
+			"address":        peer.Address,
+			"trust_score":    peer.TrustScore,
+			"uptime_score":   peer.UptimeScore,
+			"age_score":      peer.AgeScore,
+			"latency":        peer.Latency,
+			"hop_distance":   peer.HopDistance,
+			"is_connected":   peer.IsConnected,
+			"last_seen":      peer.LastSeen,
+			"connection_age": tn.TrustEngine.GetPeerAge(peer),
+		}
+		peers = append(peers, peerInfo)
+	}
+
+	// Combine all stats
+	stats := map[string]interface{}{
+		"node_id":         tn.NodeID,
+		"is_running":      tn.IsRunning,
+		"listen_port":     tn.ListenPort,
+		"max_peers":       tn.MaxPeers,
+		"min_trust_score": tn.MinTrustScore,
+		"peers":           peers,
+	}
+
+	// Merge topology and trust stats
+	for k, v := range topologyStats {
+		stats[k] = v
+	}
+	for k, v := range trustStats {
+		stats[k] = v
+	}
+
+	return stats
+}
+
+// gossipWorker periodically sends gossip messages to peers
+func (tn *TrustNetwork) gossipWorker() {
+	ticker := time.NewTicker(tn.Topology.GossipInterval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ticker.C:
+			tn.sendGossip()
+		case <-tn.StopChan:
+			return
+		}
+	}
+}
+
+// sendGossip sends a gossip message to all connected peers
+func (tn *TrustNetwork) sendGossip() {
+	tn.mu.RLock()
+
+	if !tn.IsRunning || len(tn.Topology.Peers) == 0 {
+		tn.mu.RUnlock()
+		return
+	}
+
+	// Create gossip message
+	gossipMsg := tn.Topology.CreateGossipMessage()
+
+	// Create network message
+	msg := NetworkMessage{
+		Type:      MessageTypeGossip,
+		Source:    tn.NodeID,
+		Payload:   gossipMsg,
+		Timestamp: time.Now().Unix(),
+		TTL:       tn.Topology.MaxHops,
+	}
+
+	tn.mu.RUnlock()
+
+	// Send to message channel
+	tn.MessageChan <- msg
+
+	// Update last gossip time
+	tn.Topology.LastGossip = time.Now().Unix()
+}
+
+// peerManager handles peer-related events
+func (tn *TrustNetwork) peerManager() {
+	for {
+		select {
+		case event := <-tn.PeerChan:
+			tn.handlePeerEvent(event)
+		case <-tn.StopChan:
+			return
+		}
+	}
+}
+
+// handlePeerEvent processes peer events
+func (tn *TrustNetwork) handlePeerEvent(event PeerEvent) {
+	switch event.Type {
+	case PeerEventConnected:
+		log.Printf("Peer connected: %s (Trust: %.2f)", event.Peer.Address, event.Peer.TrustScore)
+	case PeerEventDisconnected:
+		log.Printf("Peer disconnected: %s - %s", event.Peer.Address, event.Reason)
+	case PeerEventTrustUpdated:
+		log.Printf("Peer trust updated: %s (Trust: %.2f)", event.Peer.Address, event.Peer.TrustScore)
+	case PeerEventLatencyUpdated:
+		log.Printf("Peer latency updated: %s (%dms)", event.Peer.Address, event.Peer.Latency)
+	}
+}
+
+// messageProcessor handles incoming network messages
+func (tn *TrustNetwork) messageProcessor() {
+	for {
+		select {
+		case msg := <-tn.MessageChan:
+			tn.handleMessage(msg)
+		case <-tn.StopChan:
+			return
+		}
+	}
+}
+
+// handleMessage processes incoming network messages
+func (tn *TrustNetwork) handleMessage(msg NetworkMessage) {
+	switch msg.Type {
+	case MessageTypeGossip:
+		tn.handleGossipMessage(msg)
+	case MessageTypePost:
+		tn.handlePostMessage(msg)
+	case MessageTypeTransfer:
+		tn.handleTransferMessage(msg)
+	case MessageTypePing:
+		tn.handlePingMessage(msg)
+	case MessageTypePong:
+		tn.handlePongMessage(msg)
+	default:
+		log.Printf("Unknown message type: %d", msg.Type)
+	}
+}
+
+// handleGossipMessage processes gossip messages
+func (tn *TrustNetwork) handleGossipMessage(msg NetworkMessage) {
+	gossipMsg, ok := msg.Payload.(*GossipMessage)
+	if !ok {
+		log.Printf("Invalid gossip message payload")
+		return
+	}
+
+	// Process gossip message
+	updatedRoutes := tn.Topology.ProcessGossipMessage(gossipMsg)
+	if updatedRoutes > 0 {
+		log.Printf("Updated %d routes from gossip message", updatedRoutes)
+	}
+}
+
+// handlePostMessage processes post messages
+func (tn *TrustNetwork) handlePostMessage(msg NetworkMessage) {
+	post, ok := msg.Payload.(*chain.Post)
+	if !ok {
+		log.Printf("Invalid post message payload")
+		return
+	}
+
+	// Validate post (this will be implemented in the next phase)
+	log.Printf("Received post from %s: %s", msg.Source, post.Hash)
+}
+
+// handleTransferMessage processes transfer messages
+func (tn *TrustNetwork) handleTransferMessage(msg NetworkMessage) {
+	transfer, ok := msg.Payload.(*chain.Transfer)
+	if !ok {
+		log.Printf("Invalid transfer message payload")
+		return
+	}
+
+	// Validate transfer (this will be implemented in the next phase)
+	log.Printf("Received transfer from %s: %s", msg.Source, transfer.Hash)
+}
+
+// handlePingMessage processes ping messages
+func (tn *TrustNetwork) handlePingMessage(msg NetworkMessage) {
+	// Respond with pong (implementation will be added)
+	log.Printf("Received ping from %s", msg.Source)
+}
+
+// handlePongMessage processes pong messages
+func (tn *TrustNetwork) handlePongMessage(msg NetworkMessage) {
+	// Update peer latency (implementation will be added)
+	log.Printf("Received pong from %s", msg.Source)
+}
+
+// trustUpdater periodically updates trust scores
+func (tn *TrustNetwork) trustUpdater() {
+	ticker := time.NewTicker(5 * time.Minute) // Update every 5 minutes
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ticker.C:
+			tn.updateTrustScores()
+		case <-tn.StopChan:
+			return
+		}
+	}
+}
+
+// updateTrustScores updates trust scores for all peers
+func (tn *TrustNetwork) updateTrustScores() {
+	tn.mu.Lock()
+	defer tn.mu.Unlock()
+
+	for _, peer := range tn.Topology.Peers {
+		// Update trust score
+		oldTrust := peer.TrustScore
+		tn.TrustEngine.CalculateTrustScore(peer)
+
+		// Send event if trust changed significantly
+		if abs(peer.TrustScore-oldTrust) > 0.1 {
+			tn.PeerChan <- PeerEvent{
+				Type: PeerEventTrustUpdated,
+				Peer: peer,
+			}
+		}
+	}
+}
+
+// abs returns the absolute value of a float64
+func abs(x float64) float64 {
+	if x < 0 {
+		return -x
+	}
+	return x
+}
