@@ -210,14 +210,19 @@ curl -X POST -H "Content-Type: application/json" \
 - ✅ **Gas fee system** (1 character per transfer)
 - ✅ **Nonce tracking** for replay protection
 
-### Milestone 7: Post Validator & Chain Sync 🔄 **IN PROGRESS**
+### Milestone 7: Complete Mesh Network ✅ **COMPLETE**
 - ✅ **Beacon Node System** - nodes can announce themselves in blocks with signed announcements
 - ✅ **Chain Sync Protocol** - request/response structures for block synchronization
 - ✅ **Beacon Discovery** - scan blockchain for peer addresses and announcements
 - ✅ **TCP Transport Layer** - server/client implementation for decentralized block sync
 - ✅ **Peer Management** - trust scoring, reachability tracking, and peer cleanup
-- ⏳ **Integration** - connect transport to main node startup flow
-- ⏳ **Bootstrap Nodes** - hardcoded list for initial network discovery
+- ✅ **Mesh Network System** - comprehensive peer selection and connection management
+- ✅ **MeshManager** - automatic peer selection (nearest, most trusted, furthest)
+- ✅ **MeshConnection** - individual connection handling with latency tracking
+- ✅ **Gossip Propagation** - message broadcasting through mesh network
+- ✅ **Chain Synchronization** - block and post propagation across mesh
+- ✅ **Trust-Based Routing** - hop-based routing with trust scoring
+- ✅ **Connection Maintenance** - automatic connection health monitoring
 
 **Legend**: ✅ Complete | 🔄 In Progress | ⏳ Pending
 
@@ -231,6 +236,7 @@ truthchain/
 ├── wallet/         # Key management, signing, address derivation
 ├── store/          # BoltDB logic for persistent storage
 ├── miner/          # Uptime tracker & reward logic
+├── network/        # Mesh network, peer management, and gossip protocol
 └── utils/          # Hashing, encoding, common tools
 ```
 
@@ -282,11 +288,14 @@ Daily cap ensures chain size grows at a predictable rate:
 
 ## 🔮 Future Enhancements
 
-### P2P Node Networking
-- Peer discovery via known seed nodes
-- Gossip protocol for new blocks/posts
-- Sync missing blocks
-- Anti-spam & replay protection
+### P2P Node Networking ✅ **COMPLETE**
+- ✅ **Mesh Network System** - decentralized peer-to-peer networking
+- ✅ **Peer Discovery** - via beacon announcements and gossip protocol
+- ✅ **Trust-Based Selection** - automatic peer selection (nearest, most trusted, furthest)
+- ✅ **Gossip Protocol** - message propagation through mesh network
+- ✅ **Chain Synchronization** - block and post sync across network
+- ✅ **Connection Management** - automatic connection health monitoring
+- ✅ **Anti-spam & Replay Protection** - built into mesh protocol
 
 ### Optional Features
 - Compression algorithms
@@ -295,6 +304,32 @@ Daily cap ensures chain size grows at a predictable rate:
 - Web interface for viewing, searching, posting
 - Browser extension wallet
 - Governance, tipping, reputation systems
+
+## 🌐 Mesh Network Features
+
+### Peer Selection & Connection Management
+- **Automatic Peer Selection**: Maintains 3 optimal connections (nearest, most trusted, furthest hop)
+- **Trust-Based Routing**: Uses trust scores, latency, and hop distance for optimal peer selection
+- **Connection Health Monitoring**: Continuous ping/pong with latency tracking
+- **Dynamic Connection Management**: Automatically drops poor connections and establishes new ones
+
+### Gossip Protocol & Message Propagation
+- **Mesh-Based Broadcasting**: Messages propagate through selected mesh connections
+- **TTL/Hop Control**: Prevents infinite message loops with configurable hop limits
+- **Peer Discovery**: New peers learned via gossip are automatically added to the mesh
+- **Message Relay**: Posts, transfers, and blocks are relayed across the network
+
+### Beacon System & Discovery
+- **Beacon Announcements**: Nodes announce themselves in blocks with signed announcements
+- **Public Discoverability**: Beacon nodes provide public entry points to the network
+- **Trust Scoring**: Beacon nodes earn trust through uptime and network contribution
+- **Network Stability**: Beacon system ensures network resilience and discoverability
+
+### Chain Synchronization
+- **Block Propagation**: New blocks are broadcast through the mesh network
+- **Post Broadcasting**: Posts are relayed to all mesh peers for immediate propagation
+- **Transfer Broadcasting**: Character transfers propagate across the network
+- **State Synchronization**: Network state is maintained across all connected peers
 
 ## 🛡️ Security Features
 
@@ -310,6 +345,8 @@ Daily cap ensures chain size grows at a predictable rate:
 - **Mempool Persistence**: Pending posts survive node restarts
 - **Transfer Security**: Nonce-based replay protection and balance validation
 - **State Management**: Real-time wallet state tracking with pending transaction consideration
+- **Mesh Security**: Trust-based peer selection and connection validation
+- **Network Resilience**: Automatic failover and connection recovery
 
 ## 📚 Documentation
 
@@ -508,6 +545,9 @@ curl http://localhost:8080/balance
 | `--show-wallets` | Show wallet states | `--show-wallets` |
 | `--api-port` | Start API server | `--api-port 8080` |
 | `--monitor` | Live monitoring | `--monitor` |
+| `--sync-port` | Start sync server | `--sync-port 8081` |
+| `--sync-from` | Sync from peer | `--sync-from 192.168.1.100:8081` |
+| `--beacon-mode` | Enable beacon mode | `--beacon-mode --beacon-ip 1.2.3.4 --beacon-port 8080` |
 
 ## 🧪 Testing
 
@@ -523,9 +563,14 @@ go test ./chain/...
 go test ./wallet/...
 go test ./store/...
 go test ./api/...
+go test ./network/...
 
 # Run transfer tests specifically
 go test ./blockchain/... -run "Test.*Transfer"
+
+# Run mesh network tests
+go test ./network/... -run "TestMesh"
+go test ./network/... -run "TestBeacon"
 ```
 
 ## 🤝 Contributing
