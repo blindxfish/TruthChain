@@ -13,6 +13,10 @@ TruthChain is a decentralized blockchain that permanently stores user-submitted 
 
 📦 Blocks are created when enough characters are accumulated — not by time
 
+🔄 Bitcoin-style restart system with persistent configuration
+
+🔗 Self-connection detection prevents duplicate peer counting
+
 🛠️ System Design Summary
 1. Characters as Currency
 280,000 characters are generated per day (≈ 1,000 tweets).
@@ -40,6 +44,10 @@ Hosts an HTTP API on localhost for wallet/frontend use
 Earns characters for uptime
 
 Accepts and verifies new posts or transfers
+
+Remembers configuration between restarts (Bitcoin-style)
+
+Prevents self-connections and duplicate peer counting
 
 4. Frontend (Optional)
 Web, TUI, or GUI frontends can connect via the local API

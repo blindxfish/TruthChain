@@ -33,22 +33,28 @@ In a world where political figures, corporations, and media entities frequently 
 
 ## 🚀 Quick Start
 
-### Interactive Setup (Recommended)
-TruthChain now features a user-friendly interactive setup that guides you through configuration:
+### Bitcoin-Style Setup (Recommended)
+TruthChain now features a Bitcoin-style experience with persistent configuration:
 
 ```bash
 # Download and run TruthChain
 ./TruthChain.exe
 
-# Follow the interactive prompts to:
+# First time: Interactive setup guides you through:
 # 1. Create or import a wallet
 # 2. Select network (Mainnet/Testnet/Local)
 # 3. Choose node modes (API/Mesh/Beacon/Mining)
 # 4. Configure ports and settings
-# 5. Start your node automatically
+# 5. Configuration automatically saved for future starts
+
+# Subsequent runs: App loads existing data automatically
+# No setup required - just works like Bitcoin Core!
 ```
 
 ### What You'll Get
+- ✅ **Bitcoin-Style Restart**: No crashes, loads existing data automatically
+- ✅ **Persistent Configuration**: Settings saved to `truthchain-config.json`
+- ✅ **Self-Connection Detection**: No duplicate peer counting or self-pinging
 - ✅ **Wallet Creation/Import**: Create new wallet or import existing one
 - ✅ **Network Selection**: Choose between Mainnet, Testnet, or Local
 - ✅ **Node Modes**: Enable API, Mesh, Beacon, and Mining features
@@ -164,6 +170,8 @@ Nodes earn characters based on uptime, not proof-of-work. Character issuance dec
 - ✅ Block synchronization across nodes
 
 ### Milestone 7: User Experience ✅ **COMPLETE**
+- ✅ Bitcoin-style restart system
+- ✅ Self-connection detection
 - ✅ Interactive setup wizard
 - ✅ Network selection (Mainnet/Testnet/Local)
 - ✅ Node mode configuration

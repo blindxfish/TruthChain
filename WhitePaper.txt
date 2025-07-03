@@ -217,6 +217,8 @@ Daily cap ensures chain size grows at a predictable rate:
 - **Chain Synchronization**: TCP-based block sync protocol
 - **Network Transport**: Complete TCP transport layer with mesh integration
 - **Storage Layer**: BoltDB persistence with full state management
+- **Bitcoin-Style Restart**: Persistent configuration and automatic data loading
+- **Self-Connection Detection**: Prevents duplicate peer counting and self-pinging
 
 #### 🔄 In Progress
 - **Web Interface**: Browser-based user interface

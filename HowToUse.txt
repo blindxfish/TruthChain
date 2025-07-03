@@ -44,16 +44,16 @@ Imagine if every tweet, post, or statement made by politicians, companies, or an
 2. **Extract the files** to a folder on your computer
 3. **Open Command Prompt/Terminal** in that folder
 
-### Step 2: Interactive Setup (NEW!)
+### Step 2: Bitcoin-Style Setup (NEW!)
 
-TruthChain now features a user-friendly interactive setup that guides you through everything:
+TruthChain now features a Bitcoin-style experience with persistent configuration:
 
 ```bash
 # Simply run TruthChain.exe
 ./TruthChain.exe
 ```
 
-**What happens during setup:**
+**First Time Setup:**
 
 1. **Wallet Configuration**
    - Choose to create a new wallet or import an existing one
@@ -84,13 +84,21 @@ TruthChain now features a user-friendly interactive setup that guides you throug
 
 7. **Final Confirmation**
    - Review your configuration
+   - Configuration automatically saved to `truthchain-config.json`
    - Start the node automatically
+
+**Subsequent Runs:**
+- App detects existing data automatically
+- Loads saved configuration from `truthchain-config.json`
+- Skips setup entirely - just works like Bitcoin Core!
+- No crashes, no repeated configuration
 
 ### Step 3: Your Wallet Information
 
 After setup, you'll have:
 
 - **`wallet.json`**: Your wallet file (keep secure)
+- **`truthchain-config.json`**: Your saved configuration (created automatically)
 - **`YourWalletInfo.txt`**: Comprehensive wallet information including:
   - Your wallet address (safe to share)
   - Your private key (NEVER share this!)
@@ -99,6 +107,8 @@ After setup, you'll have:
   - API usage examples
 
 **⚠️ IMPORTANT**: Keep `YourWalletInfo.txt` in a secure location. It contains your private key!
+
+**🔄 Bitcoin-Style Restart**: On subsequent runs, the app will automatically detect your existing data and load your saved configuration - no setup required!
 
 ---
 
@@ -176,6 +186,7 @@ curl http://localhost:8080/transfers/pending
 - Syncs blocks and posts across the network
 - Handles both mesh communication and chain synchronization
 - Only one port needed for all network communication
+- **Self-connection detection** prevents duplicate peer counting
 
 **Beacon Mode**
 - Announces your node to the network
@@ -207,6 +218,22 @@ curl http://localhost:8080/transfers/pending
 ---
 
 ## 💡 Advanced Features
+
+### Bitcoin-Style Restart System
+
+**Automatic Configuration Loading:**
+- Configuration saved to `truthchain-config.json` after first setup
+- App automatically detects existing data on restart
+- No repeated setup required - works like Bitcoin Core
+- Seamless experience between restarts
+
+### Self-Connection Detection
+
+**Smart Peer Management:**
+- App automatically detects when connecting to itself
+- Prevents duplicate peer counting in network stats
+- Eliminates self-pinging and connection loops
+- Works with both IP addresses and domain names
 
 ### Wallet Management
 
@@ -276,6 +303,8 @@ curl http://localhost:8080/blockchain/length
 - `wallet.json`: 600 (owner read/write only)
 - `YourWalletInfo.txt`: 600 (owner read/write only)
 - `truthchain.db`: 600 (owner read/write only)
+- `truthchain-config.json`: 600 (owner read/write only)
+- `truthchain-config.json`: 600 (owner read/write only)
 
 ---
 
@@ -300,6 +329,11 @@ curl http://localhost:8080/blockchain/length
 **"Genesis block mismatch"**
 - Delete `truthchain.db` to reset the chain
 - Restart the node
+
+**"App crashes on restart"**
+- This is now fixed! TruthChain uses Bitcoin-style restart
+- App automatically detects existing data and loads saved configuration
+- No more crashes when restarting with existing database
 
 ### Getting Help
 
@@ -356,10 +390,11 @@ curl -X POST -H "Content-Type: application/json" \
 ## 🎯 Next Steps
 
 1. **Run your node**: Keep it online to earn characters
-2. **Create posts**: Share your thoughts on TruthChain
-3. **Connect to network**: Enable mesh mode to sync with others
-4. **Become a beacon**: Set up a public node for +50% rewards
-5. **Build applications**: Use the API to create web interfaces
+2. **Restart seamlessly**: Enjoy Bitcoin-style restart with no crashes
+3. **Create posts**: Share your thoughts on TruthChain
+4. **Connect to network**: Enable mesh mode to sync with others
+5. **Become a beacon**: Set up a public node for +50% rewards
+6. **Build applications**: Use the API to create web interfaces
 
 ---
 
