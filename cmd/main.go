@@ -5,12 +5,24 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"os/exec"
+	"time"
 
 	"github.com/blindxfish/truthchain/blockchain"
 	"github.com/blindxfish/truthchain/chain"
+	"github.com/blindxfish/truthchain/miner"
 	"github.com/blindxfish/truthchain/store"
 	"github.com/blindxfish/truthchain/wallet"
 )
+
+func clearScreen() {
+	cmd := exec.Command("clear")
+	if os.Getenv("OS") == "Windows_NT" {
+		cmd = exec.Command("cmd", "/c", "cls")
+	}
+	cmd.Stdout = os.Stdout
+	_ = cmd.Run()
+}
 
 func main() {
 	// Define command line flags
@@ -30,6 +42,7 @@ func main() {
 		showMempool   = flag.Bool("mempool", false, "Show mempool (pending posts)")
 		forceBlock    = flag.Bool("force-block", false, "Force creation of a new block")
 		postThreshold = flag.Int("post-threshold", chain.MainnetMinPosts, "Number of posts needed for block creation")
+		monitor       = flag.Bool("monitor", false, "Show live node/network stats (like top)")
 	)
 	flag.Parse()
 
@@ -275,6 +288,50 @@ func main() {
 		fmt.Printf("✅ Block created successfully!\n")
 		fmt.Printf("New block index: %d\n", chainLength-1)
 		return
+	}
+
+	if *monitor {
+		// Initialize uptime tracker
+		uptimeTracker := miner.NewUptimeTracker(w, storage)
+		uptimeTracker.LoadHeartbeats() // Load heartbeats from storage
+
+		for {
+			clearScreen()
+			fmt.Println("TruthChain Node Monitor (press Ctrl+C to exit)")
+			fmt.Println("============================================")
+
+			// Node stats
+			uptimeInfo := uptimeTracker.GetUptimeInfo()
+			fmt.Println("[Node Stats]")
+			fmt.Printf("  Character Balance: %v\n", uptimeInfo["character_balance"])
+			fmt.Printf("  Earning Rate: %v chars/10min, %v chars/day\n", "N/A", "N/A")
+			fmt.Printf("  Uptime (24h): %.2f%%\n", uptimeInfo["uptime_24h_percent"])
+			fmt.Printf("  Uptime (total): %.2f%%\n", uptimeInfo["uptime_total_percent"])
+			fmt.Printf("  Heartbeats (24h): %v\n", uptimeInfo["heartbeat_count"])
+			fmt.Printf("  Last Reward: %v\n", uptimeInfo["last_reward"])
+			fmt.Println()
+
+			// Blockchain stats
+			chainInfo, _ := blockchain.GetBlockchainInfo()
+			fmt.Println("[Blockchain Stats]")
+			fmt.Printf("  Block Height: %v\n", chainInfo["chain_length"])
+			fmt.Printf("  Total Posts: %v\n", chainInfo["total_post_count"])
+			fmt.Printf("  Total Characters: %v\n", chainInfo["total_character_count"])
+			fmt.Printf("  Pending Posts: %v\n", chainInfo["pending_post_count"])
+			fmt.Printf("  Pending Characters: %v/%v\n", chainInfo["pending_character_count"], chainInfo["post_threshold"])
+			fmt.Println()
+
+			// Network stats (placeholder)
+			fmt.Println("[Network Stats]")
+			fmt.Printf("  Active Nodes: N/A\n")
+			fmt.Printf("  Total Characters Minted: N/A\n")
+			fmt.Printf("  Total Characters Burned: N/A\n")
+			fmt.Printf("  Total Characters Used for Gas: N/A\n")
+			fmt.Printf("  Total Posts (Network): N/A\n")
+			fmt.Println()
+
+			time.Sleep(5 * time.Second)
+		}
 	}
 
 	// Normal node startup (no specific command)

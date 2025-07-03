@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"sync"
+	"time"
 
 	"github.com/blindxfish/truthchain/chain"
 	"go.etcd.io/bbolt"
@@ -33,6 +34,10 @@ type Storage interface {
 	GetCharacterBalance(address string) (int, error)
 	UpdateCharacterBalance(address string, amount int) error
 
+	// Heartbeat operations
+	SaveHeartbeat(heartbeat []byte) error
+	GetHeartbeats() ([][]byte, error)
+
 	// Utility operations
 	Close() error
 }
@@ -51,6 +56,7 @@ var (
 	pendingPostsBucket = []byte("pending_posts")
 	balancesBucket     = []byte("balances")
 	metadataBucket     = []byte("metadata")
+	heartbeatsBucket   = []byte("heartbeats")
 )
 
 // NewBoltDBStorage creates a new BoltDB storage instance
@@ -78,7 +84,7 @@ func NewBoltDBStorage(dbPath string) (*BoltDBStorage, error) {
 // initializeBuckets creates the necessary buckets if they don't exist
 func (s *BoltDBStorage) initializeBuckets() error {
 	return s.db.Update(func(tx *bbolt.Tx) error {
-		buckets := [][]byte{blocksBucket, postsBucket, pendingPostsBucket, balancesBucket, metadataBucket}
+		buckets := [][]byte{blocksBucket, postsBucket, pendingPostsBucket, balancesBucket, metadataBucket, heartbeatsBucket}
 
 		for _, bucketName := range buckets {
 			_, err := tx.CreateBucketIfNotExists(bucketName)
@@ -464,6 +470,46 @@ func (s *BoltDBStorage) ClearPendingPosts() error {
 			return pendingBucket.Delete(key)
 		})
 	})
+}
+
+// SaveHeartbeat saves a heartbeat to storage
+func (s *BoltDBStorage) SaveHeartbeat(heartbeat []byte) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	return s.db.Update(func(tx *bbolt.Tx) error {
+		heartbeatsBucket := tx.Bucket(heartbeatsBucket)
+
+		// Use timestamp as key for unique identification
+		timestamp := fmt.Sprintf("%d", time.Now().UnixNano())
+
+		if err := heartbeatsBucket.Put([]byte(timestamp), heartbeat); err != nil {
+			return fmt.Errorf("failed to save heartbeat: %w", err)
+		}
+
+		return nil
+	})
+}
+
+// GetHeartbeats retrieves all heartbeats from storage
+func (s *BoltDBStorage) GetHeartbeats() ([][]byte, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	var heartbeats [][]byte
+	err := s.db.View(func(tx *bbolt.Tx) error {
+		heartbeatsBucket := tx.Bucket(heartbeatsBucket)
+
+		return heartbeatsBucket.ForEach(func(key, value []byte) error {
+			// Copy the value to avoid issues with the transaction
+			heartbeatCopy := make([]byte, len(value))
+			copy(heartbeatCopy, value)
+			heartbeats = append(heartbeats, heartbeatCopy)
+			return nil
+		})
+	})
+
+	return heartbeats, err
 }
 
 // Close closes the database connection

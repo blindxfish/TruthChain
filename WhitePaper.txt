@@ -28,6 +28,13 @@ The goal of TruthChain is to create a globally distributed system where statemen
 - Users may transfer characters to others using signed transactions
 - All actions are cryptographically signed using wallet keypairs
 
+### Transaction Fees
+
+- Character transfers incur a fixed fee of 1 character (gas fee)
+- This fee is burned and removed from circulation
+- The fee prevents spam and incentivizes efficient use of the network
+- Posting fees (character burning) are separate from transfer fees
+
 ## 3. Wallet and Identity
 
 ### Wallets are Cryptographic Keypairs
@@ -77,6 +84,8 @@ Beyond that, per-node reward decreases significantly, creating scarcity and valu
 
 - Characters become scarcer and more valuable over time
 - Users must run a node or obtain characters from others to post
+- Transaction fees (1 character per transfer) are burned, creating additional deflationary pressure
+- The dual fee system (posting + transfer) ensures network sustainability
 
 ## 5. Technical Architecture Overview
 
@@ -102,6 +111,7 @@ Daily cap ensures chain size grows at a predictable rate:
 - ~102 MB/year uncompressed (~280,000 chars/day)
 - ~1 GB/decade per node (compressed)
 - Enables fully decentralized storage without cloud reliance
+- Transaction fees provide additional deflationary pressure beyond the daily cap
 
 ## 7. Roadmap
 
