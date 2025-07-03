@@ -163,6 +163,12 @@ func (mm *MeshManager) establishConnection(address string) {
 	}
 	mm.mu.RUnlock()
 
+	// Check if trying to connect to self (prevent self-connections)
+	if mm.isSelfConnection(address) {
+		log.Printf("Skipping self-connection to %s", address)
+		return
+	}
+
 	// Establish TCP connection
 	conn, err := net.DialTimeout("tcp", address, mm.connectionTimeout)
 	if err != nil {
@@ -190,6 +196,19 @@ func (mm *MeshManager) establishConnection(address string) {
 
 	// Update peer table
 	mm.network.PeerTable.MarkConnected(address)
+
+	// Add to topology as a direct peer
+	peer := &Peer{
+		Address:     address,
+		TrustScore:  0.5,
+		UptimeScore: 0.5,
+		AgeScore:    0.5,
+		Latency:     0,
+		HopDistance: 0,
+		IsConnected: true,
+		LastSeen:    time.Now().Unix(),
+	}
+	mm.network.Topology.AddPeer(peer)
 
 	// Send connection event
 	mm.connChan <- ConnectionEvent{
@@ -219,6 +238,9 @@ func (mm *MeshManager) dropConnection(address string) {
 	if exists {
 		// Update peer table
 		mm.network.PeerTable.MarkDisconnected(address)
+
+		// Remove from topology
+		mm.network.Topology.RemovePeer(address)
 
 		// Send disconnection event
 		mm.connChan <- ConnectionEvent{
@@ -379,6 +401,12 @@ func (mm *MeshManager) pingPeer(peer *MeshConnection) {
 	// Update peer table
 	mm.network.PeerTable.UpdatePeerLatency(peer.Address, latency.Milliseconds())
 
+	// Update topology peer latency
+	if topologyPeer, exists := mm.network.Topology.Peers[peer.Address]; exists {
+		topologyPeer.Latency = int(latency.Milliseconds())
+		topologyPeer.LastSeen = time.Now().Unix()
+	}
+
 	// Send latency update event
 	mm.connChan <- ConnectionEvent{
 		Type:    ConnectionEventLatencyUpdated,
@@ -407,6 +435,55 @@ func (mm *MeshManager) SendToMesh(message []byte) error {
 	}
 
 	return lastError
+}
+
+// isSelfConnection checks if the given address is a self-connection
+func (mm *MeshManager) isSelfConnection(address string) bool {
+	// Get our own listening address
+	ourAddress := fmt.Sprintf("127.0.0.1:%d", mm.network.ListenPort)
+
+	// Check if the target address matches our own
+	if address == ourAddress {
+		return true
+	}
+
+	// Also check for localhost variations
+	if strings.HasPrefix(address, "127.0.0.1:") || strings.HasPrefix(address, "localhost:") {
+		return true
+	}
+
+	// Check if it's our own domain (if we're running a beacon node)
+	if mm.network.NodeID != "" && strings.Contains(address, mm.network.NodeID) {
+		return true
+	}
+
+	// Check for mainnet domain (since you're running the mainnet node)
+	if strings.Contains(address, "mainnet.truth-chain.org") {
+		return true
+	}
+
+	// Check if it's our own domain by resolving the address
+	// Extract hostname from address (remove port)
+	hostPort := strings.Split(address, ":")
+	if len(hostPort) == 2 {
+		hostname := hostPort[0]
+		port := hostPort[1]
+
+		// If the port matches our listening port, it might be us
+		if port == fmt.Sprintf("%d", mm.network.ListenPort) {
+			// Check if this hostname resolves to our local IP
+			ips, err := net.LookupHost(hostname)
+			if err == nil {
+				for _, ip := range ips {
+					if ip == "127.0.0.1" || ip == "::1" || strings.HasPrefix(ip, "192.168.") || strings.HasPrefix(ip, "10.") {
+						return true
+					}
+				}
+			}
+		}
+	}
+
+	return false
 }
 
 // GetMeshStats returns statistics about mesh connections
@@ -458,6 +535,19 @@ func (mm *MeshManager) AcceptInboundConnection(conn net.Conn, remoteAddr string)
 	// Add to peer table
 	mm.network.PeerTable.AddPeer(remoteAddr, 1, "", 0.5)
 	mm.network.PeerTable.MarkConnected(remoteAddr)
+
+	// Add to topology as a direct peer
+	peer := &Peer{
+		Address:     remoteAddr,
+		TrustScore:  0.5,
+		UptimeScore: 0.5,
+		AgeScore:    0.5,
+		Latency:     0,
+		HopDistance: 0,
+		IsConnected: true,
+		LastSeen:    time.Now().Unix(),
+	}
+	mm.network.Topology.AddPeer(peer)
 
 	// Send connection event
 	mm.connChan <- ConnectionEvent{

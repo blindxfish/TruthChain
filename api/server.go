@@ -36,7 +36,7 @@ func NewAPIServer(dbPath string, port int) (*APIServer, error) {
 	}
 
 	// Initialize blockchain (read-only mode)
-	bc, err := blockchain.NewBlockchain(storage, 5) // Default post threshold
+	bc, err := blockchain.NewBlockchain(storage, 5, "truthchain-mainnet") // Default post threshold and network
 	if err != nil {
 		return nil, fmt.Errorf("failed to initialize blockchain: %w", err)
 	}

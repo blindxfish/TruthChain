@@ -73,6 +73,76 @@ func getLocalIP() string {
 	return "127.0.0.1"
 }
 
+// checkForExistingData checks if there's existing TruthChain data and loads configuration
+func checkForExistingData() *NodeConfig {
+	// Check for existing database
+	dbPath := "truthchain.db"
+	if _, err := os.Stat(dbPath); os.IsNotExist(err) {
+		log.Printf("No existing database found at %s", dbPath)
+		return nil
+	}
+
+	// Check for existing wallet
+	walletPath := "wallet.json"
+	if _, err := os.Stat(walletPath); os.IsNotExist(err) {
+		log.Printf("No existing wallet found at %s", walletPath)
+		return nil
+	}
+
+	// Check for existing config file
+	configPath := "truthchain-config.json"
+	if _, err := os.Stat(configPath); os.IsNotExist(err) {
+		log.Printf("No existing config found at %s", configPath)
+		return nil
+	}
+
+	// Load existing configuration
+	config, err := loadExistingConfig(configPath)
+	if err != nil {
+		log.Printf("Failed to load existing config: %v", err)
+		return nil
+	}
+
+	log.Printf("Found existing TruthChain data:")
+	log.Printf("  Database: %s", config.DBPath)
+	log.Printf("  Wallet: %s", config.WalletPath)
+	log.Printf("  Network: %s", config.NetworkID)
+	log.Printf("  API Port: %d", config.APIPort)
+	log.Printf("  Mesh Port: %d", config.MeshPort)
+
+	return config
+}
+
+// loadExistingConfig loads configuration from a JSON file
+func loadExistingConfig(configPath string) (*NodeConfig, error) {
+	data, err := os.ReadFile(configPath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read config file: %w", err)
+	}
+
+	var config NodeConfig
+	if err := json.Unmarshal(data, &config); err != nil {
+		return nil, fmt.Errorf("failed to parse config file: %w", err)
+	}
+
+	return &config, nil
+}
+
+// saveConfig saves configuration to a JSON file
+func saveConfig(config *NodeConfig) error {
+	data, err := json.MarshalIndent(config, "", "  ")
+	if err != nil {
+		return fmt.Errorf("failed to marshal config: %w", err)
+	}
+
+	configPath := "truthchain-config.json"
+	if err := os.WriteFile(configPath, data, 0644); err != nil {
+		return fmt.Errorf("failed to write config file: %w", err)
+	}
+
+	return nil
+}
+
 func main() {
 	// Check if user wants to skip interactive setup
 	if len(os.Args) > 1 && (os.Args[1] == "--help" || os.Args[1] == "-h") {
@@ -80,11 +150,17 @@ func main() {
 		return
 	}
 
-	// Run interactive setup
-	config := runInteractiveSetup()
+	// Bitcoin-style approach: Check for existing data
+	config := checkForExistingData()
 	if config == nil {
-		log.Println("Setup cancelled by user")
-		return
+		// No existing data found, run interactive setup
+		config = runInteractiveSetup()
+		if config == nil {
+			log.Println("Setup cancelled by user")
+			return
+		}
+	} else {
+		log.Printf("Found existing TruthChain data, starting with saved configuration")
 	}
 
 	// Create and start node
@@ -222,7 +298,7 @@ func runInteractiveSetup() *NodeConfig {
 		return nil
 	}
 
-	return &NodeConfig{
+	config := &NodeConfig{
 		DBPath:            dbPath,
 		APIPort:           ports.APIPort,
 		MeshPort:          ports.MeshPort,
@@ -238,6 +314,16 @@ func runInteractiveSetup() *NodeConfig {
 		PrivateKey:        walletConfig.PrivateKey,
 		ConfigureFirewall: firewallConfig,
 	}
+
+	// Save configuration for future starts
+	if err := saveConfig(config); err != nil {
+		log.Printf("Warning: Failed to save configuration: %v", err)
+		log.Printf("You'll need to run setup again on next start")
+	} else {
+		log.Printf("Configuration saved to truthchain-config.json")
+	}
+
+	return config
 }
 
 type NodeModes struct {
@@ -529,7 +615,7 @@ func NewTruthChainNode(config *NodeConfig) (*TruthChainNode, error) {
 	}
 
 	// Initialize blockchain
-	blockchain, err := blockchain.NewBlockchain(storage, config.PostThreshold)
+	blockchain, err := blockchain.NewBlockchain(storage, config.PostThreshold, config.NetworkID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to initialize blockchain: %w", err)
 	}
@@ -1030,10 +1116,40 @@ func (n *TruthChainNode) handleNetworkStats(w http.ResponseWriter, r *http.Reque
 }
 
 func (n *TruthChainNode) handleGetPeers(w http.ResponseWriter, r *http.Request) {
-	response := map[string]interface{}{
-		"status": "peers_not_available",
-		"note":   "Peer list requires active trust network connection",
+	var response map[string]interface{}
+
+	if n.trustNetwork != nil && n.trustNetwork.IsRunning {
+		// Get actual peer information from the trust network
+		networkStats := n.trustNetwork.GetNetworkStats()
+
+		// Extract peer information
+		peers, ok := networkStats["peers"].([]map[string]interface{})
+		if ok && len(peers) > 0 {
+			response = map[string]interface{}{
+				"status":     "connected",
+				"peer_count": len(peers),
+				"peers":      peers,
+				"network_info": map[string]interface{}{
+					"node_id":     networkStats["node_id"],
+					"listen_port": networkStats["listen_port"],
+					"max_peers":   networkStats["max_peers"],
+				},
+			}
+		} else {
+			response = map[string]interface{}{
+				"status":     "no_peers",
+				"peer_count": 0,
+				"peers":      []interface{}{},
+				"note":       "No peers currently connected",
+			}
+		}
+	} else {
+		response = map[string]interface{}{
+			"status": "network_disabled",
+			"note":   "Mesh network is not enabled or not running",
+		}
 	}
+
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(response)
 }

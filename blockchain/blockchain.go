@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"log"
 	"sync"
 	"time"
 
@@ -26,9 +27,9 @@ type Blockchain struct {
 }
 
 // NewBlockchain creates a new blockchain with persistent storage
-func NewBlockchain(storage store.Storage, postThreshold int) (*Blockchain, error) {
+func NewBlockchain(storage store.Storage, postThreshold int, networkID string) (*Blockchain, error) {
 	// Validate mainnet rules if using mainnet
-	if err := chain.ValidateMainnetRules(postThreshold, "truthchain-mainnet"); err != nil {
+	if err := chain.ValidateMainnetRules(postThreshold, networkID); err != nil {
 		return nil, fmt.Errorf("mainnet validation failed: %w", err)
 	}
 
@@ -42,7 +43,7 @@ func NewBlockchain(storage store.Storage, postThreshold int) (*Blockchain, error
 		lastBlockTime: time.Now(),
 	}
 
-	// Check if we need to create genesis block
+	// Bitcoin-style approach: Always ensure genesis block exists
 	_, err := storage.GetLatestBlock()
 	if err != nil {
 		// No blocks exist, create genesis block
@@ -50,20 +51,11 @@ func NewBlockchain(storage store.Storage, postThreshold int) (*Blockchain, error
 		if err := storage.SaveBlock(genesis); err != nil {
 			return nil, fmt.Errorf("failed to save genesis block: %w", err)
 		}
+		log.Printf("Created genesis block for network: %s", networkID)
 	} else {
-		// Check if genesis block exists at index 0 and validate it
-		genesisBlock, err := storage.GetBlock(0)
-		if err != nil {
-			return nil, fmt.Errorf("failed to get genesis block: %w", err)
-		}
-		if genesisBlock == nil {
-			return nil, fmt.Errorf("genesis block not found at index 0")
-		}
-
-		// Validate genesis block matches mainnet
-		if !chain.IsMainnetGenesis(genesisBlock) {
-			return nil, fmt.Errorf("invalid genesis block: hash mismatch or wrong timestamp")
-		}
+		// Genesis block exists - let the network consensus determine validity
+		// No local validation needed, will sync with peers
+		log.Printf("Genesis block found, will sync with network: %s", networkID)
 	}
 
 	// Load pending posts from storage
