@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"net"
+	"strings"
 	"sync"
 	"time"
 )
@@ -258,9 +259,36 @@ func (mm *MeshManager) handleConnection(meshConn *MeshConnection) {
 
 // processReceivedData processes data received from a mesh peer
 func (mm *MeshManager) processReceivedData(address string, data []byte) {
-	// Try to decode as NetworkMessage
-	if err := mm.ReceiveNetworkMessage(data); err != nil {
-		log.Printf("Failed to decode mesh message from %s: %v", address, err)
+	// Convert to string for easier processing
+	dataStr := string(data)
+
+	// Check if it's a ping message
+	if strings.HasPrefix(dataStr, "PING:") {
+		// Handle ping message (could implement pong response here)
+		log.Printf("Received ping from %s", address)
+		return
+	}
+
+	// Check if it looks like HTTP (starts with HTTP method)
+	if strings.HasPrefix(dataStr, "GET ") || strings.HasPrefix(dataStr, "POST ") ||
+		strings.HasPrefix(dataStr, "PUT ") || strings.HasPrefix(dataStr, "DELETE ") ||
+		strings.HasPrefix(dataStr, "HEAD ") || strings.HasPrefix(dataStr, "OPTIONS ") {
+		log.Printf("Received HTTP request on mesh port from %s - ignoring (use API port 8080 for HTTP)", address)
+		return
+	}
+
+	// Check if it looks like JSON (starts with { or [)
+	if len(dataStr) > 0 && (dataStr[0] == '{' || dataStr[0] == '[') {
+		// Try to decode as NetworkMessage
+		if err := mm.ReceiveNetworkMessage(data); err != nil {
+			log.Printf("Failed to decode JSON mesh message from %s: %v", address, err)
+		}
+	} else {
+		// Unknown protocol - log but don't spam
+		if len(dataStr) > 50 {
+			dataStr = dataStr[:50] + "..."
+		}
+		log.Printf("Received unknown protocol data from %s: %s", address, dataStr)
 	}
 
 	// Update last ping time

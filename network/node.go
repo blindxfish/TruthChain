@@ -403,7 +403,7 @@ func (tn *TrustNetwork) peerManager() {
 func (tn *TrustNetwork) handlePeerEvent(event PeerEvent) {
 	switch event.Type {
 	case PeerEventConnected:
-		log.Printf("Peer connected: %s (Trust: %.2f)", event.Peer.Address, event.Peer.TrustScore)
+		log.Printf("\033[32m🌱 New node connected: %s (Trust: %.2f)\033[0m", event.Peer.Address, event.Peer.TrustScore)
 	case PeerEventDisconnected:
 		log.Printf("Peer disconnected: %s - %s", event.Peer.Address, event.Reason)
 	case PeerEventTrustUpdated:

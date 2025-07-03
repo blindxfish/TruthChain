@@ -33,84 +33,13 @@ func NewBootstrapManager(configFile string) *BootstrapManager {
 		ConfigFile: configFile,
 	}
 
-	// Load default bootstrap nodes if config doesn't exist or is empty
+	// Load bootstrap nodes from config file
 	if err := bm.LoadConfig(); err != nil {
-		log.Printf("Failed to load bootstrap config, using defaults: %v", err)
-		bm.loadDefaultNodes()
-		bm.SaveConfig()
-	} else if len(bm.Nodes) == 0 {
-		log.Printf("Bootstrap config is empty, loading defaults")
-		bm.loadDefaultNodes()
-		bm.SaveConfig()
+		log.Printf("Failed to load bootstrap config: %v", err)
+		log.Printf("No bootstrap nodes will be available")
 	}
 
 	return bm
-}
-
-// loadDefaultNodes loads the default list of mainnet nodes
-func (bm *BootstrapManager) loadDefaultNodes() {
-	bm.mu.Lock()
-	defer bm.mu.Unlock()
-
-	// Default mainnet nodes (these would be real nodes in production)
-	bm.Nodes = []*BootstrapNode{
-		{
-			Address:     "mainnet.truthchain.org:9876",
-			Description: "Official TruthChain Mainnet Node",
-			Region:      "Global",
-			IsBeacon:    true,
-			TrustScore:  0.9,
-			LastSeen:    0,
-		},
-		{
-			Address:     "beacon1.truthchain.org:9876",
-			Description: "TruthChain Beacon Node 1",
-			Region:      "North America",
-			IsBeacon:    true,
-			TrustScore:  0.8,
-			LastSeen:    0,
-		},
-		{
-			Address:     "beacon2.truthchain.org:9876",
-			Description: "TruthChain Beacon Node 2",
-			Region:      "Europe",
-			IsBeacon:    true,
-			TrustScore:  0.8,
-			LastSeen:    0,
-		},
-		{
-			Address:     "beacon3.truthchain.org:9876",
-			Description: "TruthChain Beacon Node 3",
-			Region:      "Asia",
-			IsBeacon:    true,
-			TrustScore:  0.8,
-			LastSeen:    0,
-		},
-		{
-			Address:     "node1.truthchain.org:9876",
-			Description: "TruthChain Mesh Node 1",
-			Region:      "North America",
-			IsBeacon:    false,
-			TrustScore:  0.7,
-			LastSeen:    0,
-		},
-		{
-			Address:     "node2.truthchain.org:9876",
-			Description: "TruthChain Mesh Node 2",
-			Region:      "Europe",
-			IsBeacon:    false,
-			TrustScore:  0.7,
-			LastSeen:    0,
-		},
-		{
-			Address:     "node3.truthchain.org:9876",
-			Description: "TruthChain Mesh Node 3",
-			Region:      "Asia",
-			IsBeacon:    false,
-			TrustScore:  0.7,
-			LastSeen:    0,
-		},
-	}
 }
 
 // LoadConfig loads bootstrap nodes from config file

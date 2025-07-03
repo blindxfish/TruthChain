@@ -10,6 +10,8 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"syscall"
@@ -40,19 +42,20 @@ type TruthChainNode struct {
 
 // NodeConfig holds the node configuration
 type NodeConfig struct {
-	DBPath        string
-	APIPort       int
-	MeshPort      int
-	PostThreshold int
-	NetworkID     string
-	BeaconMode    bool
-	MeshMode      bool
-	MiningMode    bool
-	APIMode       bool
-	Domain        string
-	WalletPath    string
-	ImportWallet  bool
-	PrivateKey    string
+	DBPath            string
+	APIPort           int
+	MeshPort          int
+	PostThreshold     int
+	NetworkID         string
+	BeaconMode        bool
+	MeshMode          bool
+	MiningMode        bool
+	APIMode           bool
+	Domain            string
+	WalletPath        string
+	ImportWallet      bool
+	PrivateKey        string
+	ConfigureFirewall bool
 }
 
 func clearScreen() {
@@ -90,6 +93,34 @@ func main() {
 		log.Fatalf("Failed to create node: %v", err)
 	}
 
+	// Configure Windows Firewall if on Windows
+	if (os.Getenv("OS") == "Windows_NT" && config.ConfigureFirewall) || (isLinux() && config.ConfigureFirewall) {
+		exePath := ""
+		if os.Getenv("OS") == "Windows_NT" {
+			// Get the executable path for Windows
+			var err error
+			exePath, err = os.Executable()
+			if err != nil {
+				log.Printf("Warning: Could not get executable path for firewall configuration: %v", err)
+			}
+			exePath, err = filepath.Abs(exePath)
+			if err != nil {
+				log.Printf("Warning: Could not get absolute path for firewall configuration: %v", err)
+			}
+		}
+		if os.Getenv("OS") == "Windows_NT" {
+			if err := ConfigureFirewall(config.APIPort, config.MeshPort, exePath); err != nil {
+				log.Printf("Warning: Failed to configure firewall rules: %v", err)
+				log.Printf("You may need to manually allow TruthChain through Windows Firewall")
+			}
+		} else if isLinux() {
+			if err := ConfigureLinuxFirewall(config.APIPort, config.MeshPort); err != nil {
+				log.Printf("Warning: Failed to configure Linux firewall rules: %v", err)
+				log.Printf("You may need to manually allow TruthChain through your Linux firewall")
+			}
+		}
+	}
+
 	// Start the node
 	if err := node.Start(); err != nil {
 		log.Fatalf("Failed to start node: %v", err)
@@ -103,6 +134,19 @@ func main() {
 	log.Printf("Shutting down TruthChain node...")
 	if err := node.Stop(); err != nil {
 		log.Printf("Error stopping node: %v", err)
+	}
+
+	// Clean up firewall rules on Windows
+	if (os.Getenv("OS") == "Windows_NT" && config.ConfigureFirewall) || (isLinux() && config.ConfigureFirewall) {
+		if os.Getenv("OS") == "Windows_NT" {
+			if err := RemoveFirewallRules(); err != nil {
+				log.Printf("Warning: Failed to remove firewall rules: %v", err)
+			}
+		} else if isLinux() {
+			if err := RemoveLinuxFirewallRules(config.APIPort, config.MeshPort); err != nil {
+				log.Printf("Warning: Failed to remove Linux firewall rules: %v", err)
+			}
+		}
 	}
 }
 
@@ -170,25 +214,29 @@ func runInteractiveSetup() *NodeConfig {
 	// Show final configuration
 	showFinalConfig(networkID, modes, ports, domain, dbPath, postThreshold, walletConfig)
 
+	// Ask about firewall configuration
+	firewallConfig := configureFirewall(reader)
+
 	// Confirm configuration
 	if !confirmConfiguration(reader) {
 		return nil
 	}
 
 	return &NodeConfig{
-		DBPath:        dbPath,
-		APIPort:       ports.APIPort,
-		MeshPort:      ports.MeshPort,
-		PostThreshold: postThreshold,
-		NetworkID:     networkID,
-		BeaconMode:    modes.BeaconMode,
-		MeshMode:      modes.MeshMode,
-		MiningMode:    modes.MiningMode,
-		APIMode:       modes.APIMode,
-		Domain:        domain,
-		WalletPath:    walletConfig.Path,
-		ImportWallet:  walletConfig.ImportWallet,
-		PrivateKey:    walletConfig.PrivateKey,
+		DBPath:            dbPath,
+		APIPort:           ports.APIPort,
+		MeshPort:          ports.MeshPort,
+		PostThreshold:     postThreshold,
+		NetworkID:         networkID,
+		BeaconMode:        modes.BeaconMode,
+		MeshMode:          modes.MeshMode,
+		MiningMode:        modes.MiningMode,
+		APIMode:           modes.APIMode,
+		Domain:            domain,
+		WalletPath:        walletConfig.Path,
+		ImportWallet:      walletConfig.ImportWallet,
+		PrivateKey:        walletConfig.PrivateKey,
+		ConfigureFirewall: firewallConfig,
 	}
 }
 
@@ -340,6 +388,21 @@ func configureDatabase(reader *bufio.Reader) string {
 	}
 }
 
+func configureFirewall(reader *bufio.Reader) bool {
+	fmt.Println()
+	fmt.Println("🔧 Firewall Configuration:")
+	fmt.Println("TruthChain needs to communicate on ports for API and mesh networking.")
+	fmt.Println("On Windows, we can automatically configure Windows Firewall rules.")
+	fmt.Println()
+
+	if os.Getenv("OS") == "Windows_NT" {
+		return getYesNo(reader, "Automatically configure Windows Firewall rules?", true)
+	} else {
+		fmt.Println("ℹ️  Firewall configuration is only available on Windows")
+		return false
+	}
+}
+
 func configurePostThreshold(reader *bufio.Reader) int {
 	fmt.Println()
 	fmt.Println("📝 Post Threshold Configuration:")
@@ -412,6 +475,14 @@ func showFinalConfig(networkID string, modes *NodeModes, ports *PortConfig, doma
 	} else {
 		fmt.Printf("Wallet Type: New\n")
 	}
+
+	// Show firewall configuration
+	if os.Getenv("OS") == "Windows_NT" {
+		fmt.Printf("Firewall: Auto-configure Windows Firewall\n")
+	} else {
+		fmt.Printf("Firewall: Manual configuration required\n")
+	}
+
 	fmt.Println()
 	fmt.Println("Enabled Features:")
 	if modes.APIMode {
@@ -511,7 +582,7 @@ func NewTruthChainNode(config *NodeConfig) (*TruthChainNode, error) {
 		nil, // UptimeTracker (set later if mining enabled)
 		blockchain,
 		config.MeshPort,
-		"", // Bootstrap config (can be a file or string)
+		"bootstrap.json", // Bootstrap config file
 	)
 
 	// Create router for API
@@ -649,6 +720,7 @@ func (n *TruthChainNode) setupAPIRoutes() {
 	// Network endpoints
 	n.router.HandleFunc("/network/stats", n.handleNetworkStats).Methods("GET")
 	n.router.HandleFunc("/network/peers", n.handleGetPeers).Methods("GET")
+	n.router.HandleFunc("/network/firewall", n.handleFirewallStatus).Methods("GET")
 
 	// Add CORS headers
 	n.router.Use(n.corsMiddleware)
@@ -966,6 +1038,24 @@ func (n *TruthChainNode) handleGetPeers(w http.ResponseWriter, r *http.Request) 
 	json.NewEncoder(w).Encode(response)
 }
 
+func (n *TruthChainNode) handleFirewallStatus(w http.ResponseWriter, r *http.Request) {
+	var response map[string]interface{}
+	if os.Getenv("OS") == "Windows_NT" {
+		status := CheckFirewallStatus(n.config.APIPort, n.config.MeshPort)
+		response = status
+	} else if isLinux() {
+		status := CheckLinuxFirewallStatus(n.config.APIPort, n.config.MeshPort)
+		response = status
+	} else {
+		response = map[string]interface{}{
+			"status": "not_supported",
+			"note":   "Firewall configuration is only available on Windows and Linux",
+		}
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(response)
+}
+
 func (n *TruthChainNode) corsMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Access-Control-Allow-Origin", "*")
@@ -1215,4 +1305,8 @@ Remember: Your wallet is your responsibility. Keep it secure!
 	}
 
 	return nil
+}
+
+func isLinux() bool {
+	return strings.Contains(strings.ToLower(runtime.GOOS), "linux")
 }

@@ -162,7 +162,7 @@ Edit
   "type": "beacon_announce",
   "payload": {
     "node_id": "04ab...1234",       // Public key of the node
-    "ip": "beacon.truthchain.org",  // Domain or IP (IPv4/IPv6)
+    "ip": "beacon.truth-chain.org",  // Domain or IP (IPv4/IPv6)
     "port": 9876,                   // Listening port
     "timestamp": 1723982301,        // UNIX time of declaration
     "uptime": 99.32,                // Reported uptime %
