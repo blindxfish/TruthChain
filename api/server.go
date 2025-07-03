@@ -38,6 +38,7 @@ func (s *Server) Start() error {
 	// Set up routes
 	http.HandleFunc("/status", s.handleStatus)
 	http.HandleFunc("/wallet", s.handleWallet)
+	http.HandleFunc("/wallet/backup", s.handleWalletBackup)
 	http.HandleFunc("/post", s.handlePost)
 	http.HandleFunc("/posts/latest", s.handleLatestPosts)
 	http.HandleFunc("/characters/send", s.handleSendCharacters)
@@ -111,6 +112,31 @@ func (s *Server) handleWallet(w http.ResponseWriter, r *http.Request) {
 	}
 
 	s.writeJSON(w, walletInfo)
+}
+
+// handleWalletBackup handles GET /wallet/backup
+func (s *Server) handleWalletBackup(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	// Create wallet backup
+	backup, err := s.wallet.ExportBackup()
+	if err != nil {
+		http.Error(w, fmt.Sprintf("Failed to create wallet backup: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	// Set headers for file download
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=\"wallet_backup_%s.json\"", s.wallet.GetAddress()[:8]))
+	w.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate")
+	w.Header().Set("Pragma", "no-cache")
+	w.Header().Set("Expires", "0")
+
+	// Write backup JSON
+	s.writeJSON(w, backup)
 }
 
 // handlePost handles POST /post

@@ -307,6 +307,35 @@ func (bc *Blockchain) GetChainLength() int {
 	return len(bc.Blocks)
 }
 
+// AddBlock adds a block to the blockchain
+func (bc *Blockchain) AddBlock(block *Block) error {
+	bc.mu.Lock()
+	defer bc.mu.Unlock()
+
+	// Validate the block
+	if err := block.ValidateBlock(); err != nil {
+		return fmt.Errorf("invalid block: %w", err)
+	}
+
+	// Check if block index is correct
+	expectedIndex := len(bc.Blocks)
+	if block.Index != expectedIndex {
+		return fmt.Errorf("block index mismatch: expected %d, got %d", expectedIndex, block.Index)
+	}
+
+	// Check previous hash (except genesis)
+	if block.Index > 0 {
+		if block.PrevHash != bc.Blocks[block.Index-1].Hash {
+			return fmt.Errorf("previous hash mismatch")
+		}
+	}
+
+	// Add block to chain
+	bc.Blocks = append(bc.Blocks, block)
+
+	return nil
+}
+
 // GetTotalCharacterCount returns the total characters in all blocks
 func (bc *Blockchain) GetTotalCharacterCount() int {
 	bc.mu.RLock()

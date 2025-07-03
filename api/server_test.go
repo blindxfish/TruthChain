@@ -45,7 +45,7 @@ func setupTestServer(t *testing.T) (*Server, func()) {
 	}
 
 	// Create test uptime tracker
-	uptimeTracker := miner.NewUptimeTracker(w, storage)
+	uptimeTracker := miner.NewUptimeTracker(w, storage, nil)
 
 	// Create test server
 	server := NewServer(bc, uptimeTracker, w, storage, 8080)

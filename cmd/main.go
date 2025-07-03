@@ -67,6 +67,13 @@ func main() {
 		beaconMode = flag.Bool("beacon", false, "Enable beacon mode for peer discovery")
 		beaconIP   = flag.String("beacon-ip", "", "Beacon IP address (required with --beacon)")
 		beaconPort = flag.Int("beacon-port", 9876, "Beacon port (default: 9876)")
+		meshMode   = flag.Bool("mesh", false, "Enable mesh network mode for decentralized sync")
+		meshPort   = flag.Int("mesh-port", 9877, "Mesh network port (default: 9877)")
+
+		// Wallet backup and restore flags
+		backupWallet   = flag.String("backup", "", "Create wallet backup to file path")
+		restoreWallet  = flag.String("restore", "", "Restore wallet from backup file path")
+		validateBackup = flag.String("validate-backup", "", "Validate backup file without restoring")
 	)
 	flag.Parse()
 
@@ -103,6 +110,72 @@ func main() {
 		}
 	}
 
+	// Handle wallet backup commands (before blockchain initialization)
+	if *backupWallet != "" {
+		fmt.Printf("Creating wallet backup to: %s\n", *backupWallet)
+
+		if err := w.SaveBackup(*backupWallet); err != nil {
+			log.Fatalf("Failed to create wallet backup: %v", err)
+		}
+
+		fmt.Printf("✅ Wallet backup created successfully!\n")
+		fmt.Printf("Backup file: %s\n", *backupWallet)
+		fmt.Printf("Wallet address: %s\n", w.GetAddress())
+		fmt.Printf("Network: %s\n", w.GetNetwork())
+
+		if w.Metadata != nil {
+			fmt.Printf("Wallet name: %s\n", w.Metadata.Name)
+			fmt.Printf("Created: %s\n", w.Metadata.Created.Format("2006-01-02 15:04:05"))
+		}
+
+		fmt.Printf("\n⚠️  IMPORTANT: Keep this backup file secure!\n")
+		fmt.Printf("   - Store it in a safe location\n")
+		fmt.Printf("   - Make multiple copies\n")
+		fmt.Printf("   - Anyone with this file can access your wallet\n")
+		return
+	}
+
+	if *restoreWallet != "" {
+		fmt.Printf("Restoring wallet from backup: %s\n", *restoreWallet)
+
+		restoredWallet, err := wallet.ImportBackup(*restoreWallet)
+		if err != nil {
+			log.Fatalf("Failed to restore wallet: %v", err)
+		}
+
+		// Save the restored wallet to the specified path
+		if err := restoredWallet.SaveWallet(*walletPath); err != nil {
+			log.Fatalf("Failed to save restored wallet: %v", err)
+		}
+
+		fmt.Printf("✅ Wallet restored successfully!\n")
+		fmt.Printf("Wallet file: %s\n", *walletPath)
+		fmt.Printf("Wallet address: %s\n", restoredWallet.GetAddress())
+		fmt.Printf("Network: %s\n", restoredWallet.GetNetwork())
+
+		if restoredWallet.Metadata != nil {
+			fmt.Printf("Wallet name: %s\n", restoredWallet.Metadata.Name)
+			fmt.Printf("Original created: %s\n", restoredWallet.Metadata.Created.Format("2006-01-02 15:04:05"))
+			fmt.Printf("Last used: %s\n", restoredWallet.Metadata.LastUsed.Format("2006-01-02 15:04:05"))
+		}
+
+		fmt.Printf("\n✅ You can now continue earning with the same wallet!\n")
+		return
+	}
+
+	if *validateBackup != "" {
+		fmt.Printf("Validating backup file: %s\n", *validateBackup)
+
+		if err := wallet.ValidateBackup(*validateBackup); err != nil {
+			log.Fatalf("❌ Backup validation failed: %v", err)
+		}
+
+		fmt.Printf("✅ Backup file is valid!\n")
+		fmt.Printf("File: %s\n", *validateBackup)
+		fmt.Printf("Ready for restoration\n")
+		return
+	}
+
 	// Initialize storage
 	storage, err := store.NewBoltDBStorage(*dbPath)
 	if err != nil {
@@ -114,6 +187,18 @@ func main() {
 	blockchain, err := blockchain.NewBlockchain(storage, *postThreshold)
 	if err != nil {
 		log.Fatalf("Failed to initialize blockchain: %v", err)
+	}
+
+	// Initialize beacon manager (with nil keys for now - will implement conversion later)
+	beaconManager := network.NewBeaconManager(nil, nil)
+
+	// Enable beacon mode if requested
+	if *beaconMode {
+		if *beaconIP == "" {
+			log.Fatalf("Beacon IP address required when using --beacon flag")
+		}
+		beaconManager.EnableBeacon(*beaconIP, *beaconPort)
+		fmt.Printf("Beacon mode enabled: %s:%d\n", *beaconIP, *beaconPort)
 	}
 
 	// Handle wallet-only commands
@@ -449,7 +534,7 @@ func main() {
 
 	if *monitor {
 		// Initialize uptime tracker
-		uptimeTracker := miner.NewUptimeTracker(w, storage)
+		uptimeTracker := miner.NewUptimeTracker(w, storage, beaconManager)
 		uptimeTracker.LoadHeartbeats() // Load heartbeats from storage
 
 		for {
@@ -466,6 +551,11 @@ func main() {
 			fmt.Printf("  Uptime (total): %.2f%%\n", uptimeInfo["uptime_total_percent"])
 			fmt.Printf("  Heartbeats (24h): %v\n", uptimeInfo["heartbeat_count"])
 			fmt.Printf("  Last Reward: %v\n", uptimeInfo["last_reward"])
+			fmt.Printf("  Beacon Mode: %v\n", uptimeInfo["is_beacon"])
+			if uptimeInfo["is_beacon"].(bool) {
+				fmt.Printf("  Beacon Bonus: +%.0f%%\n", uptimeInfo["beacon_bonus_rate"])
+				fmt.Printf("  Beacon Uptime: %.2f%%\n", uptimeInfo["beacon_uptime"])
+			}
 			fmt.Println()
 
 			// Blockchain stats
@@ -478,13 +568,17 @@ func main() {
 			fmt.Printf("  Pending Characters: %v/%v\n", chainInfo["pending_character_count"], chainInfo["post_threshold"])
 			fmt.Println()
 
-			// Network stats (placeholder)
+			// Network stats
 			fmt.Println("[Network Stats]")
-			fmt.Printf("  Active Nodes: N/A\n")
-			fmt.Printf("  Total Characters Minted: N/A\n")
-			fmt.Printf("  Total Characters Burned: N/A\n")
-			fmt.Printf("  Total Characters Used for Gas: N/A\n")
-			fmt.Printf("  Total Posts (Network): N/A\n")
+			if *meshMode {
+				// TODO: Get mesh stats from trust network
+				fmt.Printf("  Mesh Network: Active\n")
+				fmt.Printf("  Mesh Port: %d\n", *meshPort)
+				fmt.Printf("  Mesh stats will be shown here when integrated.\n")
+			} else {
+				fmt.Printf("  Mesh Network: Disabled\n")
+				fmt.Printf("  Use --mesh to enable decentralized sync\n")
+			}
 			fmt.Println()
 
 			time.Sleep(5 * time.Second)
@@ -494,7 +588,7 @@ func main() {
 	// Start API server if requested
 	if *apiPort > 0 {
 		// Initialize uptime tracker
-		uptimeTracker := miner.NewUptimeTracker(w, storage)
+		uptimeTracker := miner.NewUptimeTracker(w, storage, beaconManager)
 		uptimeTracker.LoadHeartbeats()
 
 		// Create and start API server
@@ -536,8 +630,20 @@ func main() {
 		fmt.Printf("Received %d blocks from peer\n", len(resp.Blocks))
 		fmt.Printf("Blocks range: %d to %d\n", resp.FromIndex, resp.ToIndex)
 
-		// TODO: Validate and integrate received blocks
-		// For now, just show what we received
+		// Integrate blocks using the blockchain's sync integration method
+		startTime := time.Now()
+		blocksAdded, blocksSkipped, err := blockchain.IntegrateBlocksFromSync(resp.Blocks)
+		if err != nil {
+			log.Fatalf("Failed to integrate blocks: %v", err)
+		}
+
+		duration := time.Since(startTime)
+		fmt.Printf("✅ Sync completed successfully!\n")
+		fmt.Printf("  Blocks added: %d\n", blocksAdded)
+		fmt.Printf("  Blocks skipped: %d\n", blocksSkipped)
+		fmt.Printf("  Duration: %v\n", duration)
+
+		// Show integrated blocks
 		for _, block := range resp.Blocks {
 			fmt.Printf("  Block %d: %d posts, %d characters\n",
 				block.Index, len(block.Posts), block.CharCount)
@@ -559,18 +665,48 @@ func main() {
 		}()
 	}
 
-	// Handle beacon mode
-	if *beaconMode {
-		if *beaconIP == "" {
-			log.Fatalf("Beacon IP address required when using --beacon flag")
+	// Start mesh network if requested
+	if *meshMode {
+		fmt.Printf("Starting mesh network on port %d...\n", *meshPort)
+		fmt.Printf("Mesh network address: %s:%d\n", getLocalIP(), *meshPort)
+
+		// Initialize uptime tracker for mesh network
+		uptimeTracker := miner.NewUptimeTracker(w, storage, beaconManager)
+		uptimeTracker.LoadHeartbeats()
+
+		// Create trust network
+		trustNetwork := network.NewTrustNetwork(
+			w.GetAddress(),
+			w,
+			storage,
+			uptimeTracker,
+			blockchain,
+			*meshPort,
+		)
+
+		// Start trust network
+		if err := trustNetwork.Start(); err != nil {
+			log.Fatalf("Failed to start trust network: %v", err)
 		}
 
-		fmt.Printf("Starting in beacon mode...\n")
-		fmt.Printf("Beacon Address: %s:%d\n", *beaconIP, *beaconPort)
-		fmt.Printf("Other nodes can discover this beacon from the blockchain\n")
+		// Create and start mesh sync manager
+		meshSyncManager := network.NewMeshSyncManager(trustNetwork, blockchain)
+		if err := meshSyncManager.Start(); err != nil {
+			log.Fatalf("Failed to start mesh sync manager: %v", err)
+		}
 
-		// TODO: Create beacon announcement and add to next block
-		// For now, just indicate beacon mode is enabled
+		// Discover peers from beacons
+		if err := meshSyncManager.DiscoverPeersFromBeacons(); err != nil {
+			log.Printf("Warning: Failed to discover peers from beacons: %v", err)
+		}
+
+		fmt.Printf("✅ Mesh network started successfully!\n")
+		fmt.Printf("  Node ID: %s\n", w.GetAddress())
+		fmt.Printf("  Mesh Port: %d\n", *meshPort)
+		fmt.Printf("  Beacon Mode: %t\n", *beaconMode)
+
+		// Keep the mesh network running
+		select {}
 	}
 
 	// Normal node startup (no specific command)
@@ -607,10 +743,19 @@ func main() {
 	fmt.Println("  ✅ Uptime Mining & Rewards")
 	fmt.Println("  ✅ HTTP API Server")
 	fmt.Println("  ✅ Live Monitoring Dashboard")
+	fmt.Println("  ✅ Chain Synchronization")
+	fmt.Println("  ✅ Mesh Network (Decentralized)")
+	fmt.Println("  ✅ Beacon Discovery")
 
 	fmt.Println("\nTo start the HTTP API server:")
 	fmt.Printf("  go run cmd/main.go --api-port 8080\n")
 	fmt.Println("\nTo view live node stats:")
 	fmt.Printf("  go run cmd/main.go --monitor\n")
+	fmt.Println("\nTo sync from a peer:")
+	fmt.Printf("  go run cmd/main.go --sync-from 192.168.1.100:9876\n")
+	fmt.Println("\nTo start mesh network mode:")
+	fmt.Printf("  go run cmd/main.go --mesh --mesh-port 9877\n")
+	fmt.Println("\nTo start beacon mode:")
+	fmt.Printf("  go run cmd/main.go --beacon --beacon-ip 192.168.1.100 --beacon-port 9876\n")
 	fmt.Println("\nUse --help to see all available commands.")
 }

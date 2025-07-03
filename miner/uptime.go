@@ -12,15 +12,22 @@ import (
 	"github.com/blindxfish/truthchain/wallet"
 )
 
+// BeaconChecker interface for checking beacon status
+type BeaconChecker interface {
+	IsBeaconMode() bool
+	GetBeaconUptime() float64
+}
+
 // UptimeTracker manages node uptime tracking and character rewards
 type UptimeTracker struct {
-	wallet     *wallet.Wallet
-	storage    store.Storage
-	mu         sync.RWMutex
-	startTime  time.Time
-	lastReward time.Time
-	heartbeats []Heartbeat
-	config     UptimeConfig
+	wallet        *wallet.Wallet
+	storage       store.Storage
+	beaconChecker BeaconChecker // Beacon checker for incentive calculation
+	mu            sync.RWMutex
+	startTime     time.Time
+	lastReward    time.Time
+	heartbeats    []Heartbeat
+	config        UptimeConfig
 }
 
 // UptimeConfig contains configuration for the uptime tracker
@@ -49,14 +56,15 @@ func DefaultUptimeConfig() UptimeConfig {
 }
 
 // NewUptimeTracker creates a new uptime tracker
-func NewUptimeTracker(w *wallet.Wallet, s store.Storage) *UptimeTracker {
+func NewUptimeTracker(w *wallet.Wallet, s store.Storage, beaconChecker BeaconChecker) *UptimeTracker {
 	return &UptimeTracker{
-		wallet:     w,
-		storage:    s,
-		startTime:  time.Now(),
-		lastReward: time.Now(),
-		heartbeats: []Heartbeat{},
-		config:     DefaultUptimeConfig(),
+		wallet:        w,
+		storage:       s,
+		beaconChecker: beaconChecker,
+		startTime:     time.Now(),
+		lastReward:    time.Now(),
+		heartbeats:    []Heartbeat{},
+		config:        DefaultUptimeConfig(),
 	}
 }
 
@@ -207,13 +215,31 @@ func (ut *UptimeTracker) distributeRewards() error {
 		batchReward = 1
 	}
 
+	// Apply beacon bonus if this node is a beacon
+	beaconBonus := 0
+	isBeacon := false
+	if ut.beaconChecker != nil {
+		isBeacon = ut.beaconChecker.IsBeaconMode()
+		if isBeacon {
+			// +50% bonus for beacon nodes as specified in NetworkDesign.txt
+			beaconBonus = batchReward / 2 // 50% of base reward
+			batchReward += beaconBonus
+			fmt.Printf("Beacon bonus applied: +%d characters (50%% bonus)\n", beaconBonus)
+		}
+	}
+
 	// Mint characters to the wallet
 	if err := ut.mintCharacters(batchReward); err != nil {
 		return fmt.Errorf("failed to mint characters: %w", err)
 	}
 
-	fmt.Printf("Reward distributed: %d characters (uptime: %.2f%%, daily rate: %d chars/day)\n",
-		batchReward, uptimePercent, dailyReward)
+	bonusInfo := ""
+	if isBeacon {
+		bonusInfo = fmt.Sprintf(" (includes +%d beacon bonus)", beaconBonus)
+	}
+
+	fmt.Printf("Reward distributed: %d characters%s (uptime: %.2f%%, daily rate: %d chars/day)\n",
+		batchReward, bonusInfo, uptimePercent, dailyReward)
 	ut.lastReward = time.Now()
 
 	return nil
@@ -330,6 +356,20 @@ func (ut *UptimeTracker) GetUptimeInfo() map[string]interface{} {
 		balance = 0
 	}
 
+	// Check beacon status
+	isBeacon := false
+	beaconUptime := 0.0
+	if ut.beaconChecker != nil {
+		isBeacon = ut.beaconChecker.IsBeaconMode()
+		beaconUptime = ut.beaconChecker.GetBeaconUptime()
+	}
+
+	// Calculate beacon bonus rate
+	beaconBonusRate := 0.0
+	if isBeacon {
+		beaconBonusRate = 50.0 // +50% bonus as specified in NetworkDesign.txt
+	}
+
 	return map[string]interface{}{
 		"start_time":           ut.startTime.Format("2006-01-02 15:04:05"),
 		"last_reward":          ut.lastReward.Format("2006-01-02 15:04:05"),
@@ -341,6 +381,9 @@ func (ut *UptimeTracker) GetUptimeInfo() map[string]interface{} {
 		"reward_interval":      ut.config.RewardInterval.String(),
 		"daily_cap":            ut.config.DailyCap,
 		"min_uptime_percent":   ut.config.MinUptimePercent,
+		"is_beacon":            isBeacon,
+		"beacon_uptime":        beaconUptime,
+		"beacon_bonus_rate":    beaconBonusRate,
 	}
 }
 

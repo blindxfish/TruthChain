@@ -271,6 +271,23 @@ func (bm *BeaconManager) CleanupOldBeacons(maxAge time.Duration) int {
 	return removed
 }
 
+// IsBeaconMode returns whether this node is currently in beacon mode
+func (bm *BeaconManager) IsBeaconMode() bool {
+	return bm.IsBeacon
+}
+
+// GetBeaconUptime returns the current uptime percentage for beacon announcements
+func (bm *BeaconManager) GetBeaconUptime() float64 {
+	// Calculate uptime based on how long the beacon has been active
+	if !bm.IsBeacon {
+		return 0.0
+	}
+
+	// For now, return a default uptime of 95% for beacon nodes
+	// In a real implementation, this would be calculated from actual uptime tracking
+	return 95.0
+}
+
 // Helper methods
 
 // getNodeID returns the node ID (public key hex)

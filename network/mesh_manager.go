@@ -1,6 +1,7 @@
 package network
 
 import (
+	"encoding/json"
 	"fmt"
 	"log"
 	"net"
@@ -257,9 +258,10 @@ func (mm *MeshManager) handleConnection(meshConn *MeshConnection) {
 
 // processReceivedData processes data received from a mesh peer
 func (mm *MeshManager) processReceivedData(address string, data []byte) {
-	// TODO: Implement message parsing and routing
-	// For now, just log the received data
-	log.Printf("Received %d bytes from mesh peer %s", len(data), address)
+	// Try to decode as NetworkMessage
+	if err := mm.ReceiveNetworkMessage(data); err != nil {
+		log.Printf("Failed to decode mesh message from %s: %v", address, err)
+	}
 
 	// Update last ping time
 	mm.mu.Lock()
@@ -438,4 +440,24 @@ func (mm *MeshManager) AcceptInboundConnection(conn net.Conn, remoteAddr string)
 
 	// Start connection handler
 	go mm.handleConnection(meshConn)
+}
+
+// SendNetworkMessage sends a NetworkMessage to all mesh peers
+func (mm *MeshManager) SendNetworkMessage(msg *NetworkMessage) error {
+	data, err := json.Marshal(msg)
+	if err != nil {
+		return err
+	}
+	return mm.SendToMesh(data)
+}
+
+// ReceiveNetworkMessage decodes a NetworkMessage from bytes and forwards to MessageChan
+func (mm *MeshManager) ReceiveNetworkMessage(data []byte) error {
+	var msg NetworkMessage
+	if err := json.Unmarshal(data, &msg); err != nil {
+		return err
+	}
+	// Forward to network's message channel
+	mm.network.MessageChan <- msg
+	return nil
 }

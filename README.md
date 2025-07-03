@@ -76,6 +76,7 @@ Nodes earn characters based on uptime, not proof-of-work. Character issuance dec
 - Users must run a node or obtain characters from others to post
 - Early adoption is rewarded with higher daily earnings
 - Transfer fees provide network sustainability
+- **Beacon nodes receive +50% character reward** for acting as public entry points and increasing network stability
 
 ## 🚀 Implementation Roadmap
 
@@ -105,8 +106,13 @@ Nodes earn characters based on uptime, not proof-of-work. Character issuance dec
 - ✅ Every 10 minutes share the calculated amount of the characters among all active nodes based on the reward table.
 - ✅ Reward characters to the wallet
 - ✅ Live monitoring dashboard with `--monitor` flag
+- ✅ **Beacon Incentive**: Nodes running in beacon mode receive **+50% character reward** per interval as an incentive for public discoverability and network stability.
 
 ### Milestone 5: Local HTTP API ✅ **COMPLETE**
+- ✅ RESTful API endpoints for all node operations
+- ✅ JSON responses with proper error handling
+- ✅ **Wallet backup/restore via API** for frontend integration
+- ✅ **Secure wallet backup download** with proper headers
 ```bash
 # Start the node with API server
 go run cmd/main.go --api-port 8080
@@ -120,6 +126,7 @@ go run cmd/main.go --api-port 8080
 |--------|----------|-------------|---------|
 | `GET` | `/status` | Node and blockchain status | `curl http://127.0.0.1:8080/status` |
 | `GET` | `/wallet` | Wallet information and balance | `curl http://127.0.0.1:8080/wallet` |
+| `GET` | `/wallet/backup` | Download complete wallet backup | `curl http://127.0.0.1:8080/wallet/backup` |
 | `POST` | `/post` | Create and submit a new post | `curl -X POST -H "Content-Type: application/json" -d '{"content":"Hello TruthChain!"}' http://127.0.0.1:8080/post` |
 | `GET` | `/posts/latest` | Latest block and pending posts | `curl http://127.0.0.1:8080/posts/latest` |
 | `POST` | `/characters/send` | Send characters to another address | `curl -X POST -H "Content-Type: application/json" -d '{"to":"1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa","amount":100}' http://127.0.0.1:8080/characters/send` |
@@ -144,6 +151,9 @@ curl -X POST -H "Content-Type: application/json" \
 curl -X POST -H "Content-Type: application/json" \
   -d '{"to":"1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa","amount":50}' \
   http://127.0.0.1:8080/characters/send
+
+# Download wallet backup (for restoration on other nodes)
+curl http://127.0.0.1:8080/wallet/backup -o wallet_backup.json
 ```
 
 **API Response Examples:**
@@ -199,7 +209,33 @@ curl -X POST -H "Content-Type: application/json" \
 }
 ```
 
+**GET /wallet/backup**
+```json
+{
+  "version": "1.0",
+  "created": "2025-07-03T14:54:03.0235634+02:00",
+  "metadata": {
+    "name": "wallet.key",
+    "created": "2025-07-03T14:53:51.3660894+02:00",
+    "last_used": "2025-07-03T14:54:03.0235634+02:00",
+    "notes": "",
+    "network": "mainnet",
+    "version_byte": 0
+  },
+  "private_key": "ee6c60ebe49223b7af4edb3a7f5d7a4258d0d167549c7d20dd4af86e450eb95b",
+  "public_key": "034cda2828b115a2faaf67cbb3a64d434dbe59e8a7382fe289837e9c2428d1ccd9",
+  "address": "1EAWe46tZvy1KGpcsU3sbJMcL7XmM7yrwT",
+  "backup_hash": "75071656e84f8583d425e653c4e1c496dd51c038c063e79c94ea77518fe71aaf"
+}
+}
+```
+
 ### Milestone 6: Character Transfer ✅ **COMPLETE**
+- ✅ ECDSA-signed character transfers between addresses
+- ✅ Transfer validation and state management
+- ✅ **Wallet backup and restore functionality**
+- ✅ **CLI commands for backup/restore/validation**
+- ✅ **API endpoint for wallet backup download**
 - ✅ **Signed transfer payload format** with ECDSA signatures
 - ✅ **Public key recovery** from compact signatures for verification
 - ✅ **Transfer validation** with balance and nonce checks
@@ -391,16 +427,29 @@ The TruthChain CLI provides comprehensive wallet management capabilities:
 
 # Show detailed wallet information including metadata
 ./truthchain.exe --show-wallet --debug
-
-# Create a new mainnet wallet (default)
-./truthchain.exe --wallet my-wallet.key
-
-# Create a named wallet
-./truthchain.exe --wallet my-wallet.key --name "My TruthChain Wallet"
-
-# Add balance for testing
-./truthchain.exe --add-balance 1000
 ```
+
+#### Wallet Backup & Restore ✅ **COMPLETE**
+```bash
+# Create wallet backup
+./truthchain.exe --backup wallet_backup.json
+
+# Validate backup file
+./truthchain.exe --validate-backup wallet_backup.json
+
+# Restore wallet from backup
+./truthchain.exe --restore wallet_backup.json
+
+# Download wallet backup via API
+curl http://127.0.0.1:8080/wallet/backup -o wallet_backup.json
+```
+
+**Backup Features:**
+- **Complete wallet export** with private key, public key, and metadata
+- **Hash verification** to ensure backup integrity
+- **Cross-node compatibility** - restore on any TruthChain node
+- **API integration** for frontend applications
+- **Secure format** with proper file permissions
 
 #### Multi-Network Support
 ```bash
@@ -515,6 +564,10 @@ Nonce: 1
 # Start live monitoring dashboard
 ./truthchain.exe --monitor
 ```
+- The monitor now displays:
+  - Node stats (balance, uptime, rewards, beacon status, beacon bonus)
+  - Blockchain stats (height, posts, pending)
+  - **Network stats**: mesh peer count, connections, beacon nodes, average latency, etc.
 
 #### API Server
 ```bash

@@ -29,7 +29,7 @@ func TestNewUptimeTracker(t *testing.T) {
 	}
 
 	// Create uptime tracker
-	ut := NewUptimeTracker(wallet, storage)
+	ut := NewUptimeTracker(wallet, storage, nil)
 
 	// Test initial state
 	if ut.wallet == nil {
@@ -83,7 +83,7 @@ func TestCalculateReward(t *testing.T) {
 	}
 
 	// Create uptime tracker
-	ut := NewUptimeTracker(wallet, storage)
+	ut := NewUptimeTracker(wallet, storage, nil)
 
 	// Test reward calculation for different node counts
 	testCases := []struct {
@@ -133,7 +133,7 @@ func TestCalculateUptimePercent(t *testing.T) {
 	}
 
 	// Create uptime tracker
-	ut := NewUptimeTracker(wallet, storage)
+	ut := NewUptimeTracker(wallet, storage, nil)
 
 	// Test with no heartbeats
 	uptime := ut.calculateUptimePercent()
@@ -187,7 +187,7 @@ func TestMintCharacters(t *testing.T) {
 	}
 
 	// Create uptime tracker
-	ut := NewUptimeTracker(wallet, storage)
+	ut := NewUptimeTracker(wallet, storage, nil)
 
 	// Test initial balance
 	balance, err := storage.GetCharacterBalance(wallet.GetAddress())
@@ -241,7 +241,7 @@ func TestGetUptimeInfo(t *testing.T) {
 	}
 
 	// Create uptime tracker
-	ut := NewUptimeTracker(wallet, storage)
+	ut := NewUptimeTracker(wallet, storage, nil)
 
 	// Get uptime info
 	info := ut.GetUptimeInfo()
@@ -297,7 +297,7 @@ func TestHeartbeatLogging(t *testing.T) {
 	}
 
 	// Create uptime tracker
-	ut := NewUptimeTracker(wallet, storage)
+	ut := NewUptimeTracker(wallet, storage, nil)
 
 	// Test heartbeat logging
 	if err := ut.logHeartbeat(); err != nil {
@@ -348,7 +348,7 @@ func TestDistributeRewards(t *testing.T) {
 	}
 
 	// Create uptime tracker with shorter intervals for testing
-	ut := NewUptimeTracker(wallet, storage)
+	ut := NewUptimeTracker(wallet, storage, nil)
 	ut.config.HeartbeatInterval = 1 * time.Hour // Keep default 1 hour interval
 	ut.config.RewardInterval = 1 * time.Minute  // 1 minute for testing
 	ut.config.MinUptimePercent = 50.0           // Lower threshold for testing

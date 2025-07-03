@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"encoding/pem"
 	"fmt"
 	"os"
@@ -40,6 +41,17 @@ type Wallet struct {
 	PublicKey  *btcec.PublicKey
 	Address    string
 	Metadata   *WalletMetadata
+}
+
+// WalletBackup represents a complete wallet backup
+type WalletBackup struct {
+	Version    string          `json:"version"`
+	Created    time.Time       `json:"created"`
+	Metadata   *WalletMetadata `json:"metadata"`
+	PrivateKey string          `json:"private_key"` // Hex encoded
+	PublicKey  string          `json:"public_key"`  // Hex encoded compressed
+	Address    string          `json:"address"`
+	BackupHash string          `json:"backup_hash"` // SHA256 of backup for verification
 }
 
 // NewWallet creates a new secp256k1 wallet
@@ -382,4 +394,192 @@ func RecoverPublicKeyFromSignature(messageHash string, signatureHex string) (*bt
 func PublicKeyToAddress(publicKey *btcec.PublicKey) string {
 	// Use the same logic as the wallet's address generation
 	return generateAddressWithVersion(publicKey, TruthChainMainnetVersion)
+}
+
+// ExportBackup creates a complete wallet backup
+func (w *Wallet) ExportBackup() (*WalletBackup, error) {
+	// Update last used time
+	if w.Metadata != nil {
+		w.Metadata.LastUsed = time.Now()
+	}
+
+	backup := &WalletBackup{
+		Version:    "1.0",
+		Created:    time.Now(),
+		Metadata:   w.Metadata,
+		PrivateKey: hex.EncodeToString(w.PrivateKey.Serialize()),
+		PublicKey:  hex.EncodeToString(w.PublicKey.SerializeCompressed()),
+		Address:    w.Address,
+		BackupHash: "", // Exclude from hash
+	}
+
+	// Calculate backup hash for verification (excluding BackupHash field)
+	hash, err := calculateBackupHash(backup)
+	if err != nil {
+		return nil, err
+	}
+	backup.BackupHash = hash
+
+	return backup, nil
+}
+
+// calculateBackupHash marshals the backup with BackupHash set to "" and returns the SHA256 hex
+func calculateBackupHash(backup *WalletBackup) (string, error) {
+	copy := *backup
+	copy.BackupHash = ""
+	data, err := json.Marshal(copy)
+	if err != nil {
+		return "", err
+	}
+	hash := sha256.Sum256(data)
+	return hex.EncodeToString(hash[:]), nil
+}
+
+// SaveBackup saves a wallet backup to a file
+func (w *Wallet) SaveBackup(backupPath string) error {
+	backup, err := w.ExportBackup()
+	if err != nil {
+		return fmt.Errorf("failed to create backup: %w", err)
+	}
+
+	// Ensure directory exists
+	dir := filepath.Dir(backupPath)
+	if err := os.MkdirAll(dir, 0700); err != nil {
+		return fmt.Errorf("failed to create backup directory: %w", err)
+	}
+
+	// Marshal backup to JSON
+	backupData, err := json.MarshalIndent(backup, "", "  ")
+	if err != nil {
+		return fmt.Errorf("failed to marshal backup: %w", err)
+	}
+
+	// Write backup file
+	if err := os.WriteFile(backupPath, backupData, 0600); err != nil {
+		return fmt.Errorf("failed to write backup file: %w", err)
+	}
+
+	return nil
+}
+
+// ImportBackup restores a wallet from a backup
+func ImportBackup(backupPath string) (*Wallet, error) {
+	// Read backup file
+	backupData, err := os.ReadFile(backupPath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read backup file: %w", err)
+	}
+
+	// Unmarshal backup
+	var backup WalletBackup
+	if err := json.Unmarshal(backupData, &backup); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal backup: %w", err)
+	}
+
+	// Verify backup hash (exclude BackupHash field)
+	calculatedHash, err := calculateBackupHash(&backup)
+	if err != nil {
+		return nil, fmt.Errorf("failed to calculate backup hash: %w", err)
+	}
+	if calculatedHash != backup.BackupHash {
+		return nil, fmt.Errorf("backup hash verification failed")
+	}
+
+	// Decode private key
+	privateKeyBytes, err := hex.DecodeString(backup.PrivateKey)
+	if err != nil {
+		return nil, fmt.Errorf("failed to decode private key: %w", err)
+	}
+
+	// Validate private key length
+	if len(privateKeyBytes) != btcec.PrivKeyBytesLen {
+		return nil, fmt.Errorf("invalid private key length")
+	}
+
+	// Create private key
+	privateKey, _ := btcec.PrivKeyFromBytes(privateKeyBytes)
+
+	// Verify public key matches
+	decodedPubKey, err := hex.DecodeString(backup.PublicKey)
+	if err != nil {
+		return nil, fmt.Errorf("failed to decode public key: %w", err)
+	}
+
+	publicKey, err := btcec.ParsePubKey(decodedPubKey)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse public key: %w", err)
+	}
+
+	// Verify private key matches public key
+	if !privateKey.PubKey().IsEqual(publicKey) {
+		return nil, fmt.Errorf("private key does not match public key")
+	}
+
+	// Verify address matches
+	expectedAddress := generateAddressWithVersion(publicKey, backup.Metadata.VersionByte)
+	if expectedAddress != backup.Address {
+		return nil, fmt.Errorf("address verification failed")
+	}
+
+	// Create wallet
+	wallet := &Wallet{
+		PrivateKey: privateKey,
+		PublicKey:  publicKey,
+		Address:    backup.Address,
+		Metadata:   backup.Metadata,
+	}
+
+	// Update last used time
+	if wallet.Metadata != nil {
+		wallet.Metadata.LastUsed = time.Now()
+	}
+
+	return wallet, nil
+}
+
+// ValidateBackup validates a backup file without importing it
+func ValidateBackup(backupPath string) error {
+	// Read backup file
+	backupData, err := os.ReadFile(backupPath)
+	if err != nil {
+		return fmt.Errorf("failed to read backup file: %w", err)
+	}
+
+	// Unmarshal backup
+	var backup WalletBackup
+	if err := json.Unmarshal(backupData, &backup); err != nil {
+		return fmt.Errorf("failed to unmarshal backup: %w", err)
+	}
+
+	// Verify backup hash (exclude BackupHash field)
+	calculatedHash, err := calculateBackupHash(&backup)
+	if err != nil {
+		return fmt.Errorf("failed to calculate backup hash: %w", err)
+	}
+	if calculatedHash != backup.BackupHash {
+		return fmt.Errorf("backup hash verification failed")
+	}
+
+	// Verify private key format
+	privateKeyBytes, err := hex.DecodeString(backup.PrivateKey)
+	if err != nil {
+		return fmt.Errorf("invalid private key format: %w", err)
+	}
+
+	if len(privateKeyBytes) != btcec.PrivKeyBytesLen {
+		return fmt.Errorf("invalid private key length")
+	}
+
+	// Verify public key format
+	_, err = hex.DecodeString(backup.PublicKey)
+	if err != nil {
+		return fmt.Errorf("invalid public key format: %w", err)
+	}
+
+	// Verify address format
+	if !ValidateAddressWithVersion(backup.Address, backup.Metadata.VersionByte) {
+		return fmt.Errorf("invalid address format")
+	}
+
+	return nil
 }

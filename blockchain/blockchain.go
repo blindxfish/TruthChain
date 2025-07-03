@@ -765,3 +765,48 @@ func (bc *Blockchain) GetStateInfo() map[string]interface{} {
 		"wallets":                walletList,
 	}
 }
+
+// IntegrateBlocksFromSync integrates blocks received from a sync operation
+func (bc *Blockchain) IntegrateBlocksFromSync(blocks []*chain.Block) (int, int, error) {
+	bc.mu.Lock()
+	defer bc.mu.Unlock()
+
+	blocksAdded := 0
+	blocksSkipped := 0
+
+	for _, block := range blocks {
+		// Check if we already have this block
+		existingBlock, err := bc.storage.GetBlock(block.Index)
+		if err == nil && existingBlock != nil {
+			if existingBlock.Hash == block.Hash {
+				blocksSkipped++
+				continue
+			}
+		}
+
+		// Validate block
+		if err := block.ValidateBlockWithThreshold(bc.PostThreshold); err != nil {
+			return blocksAdded, blocksSkipped, fmt.Errorf("invalid block %d: %w", block.Index, err)
+		}
+
+		// Check block index continuity
+		if block.Index > 0 {
+			prevBlock, err := bc.storage.GetBlock(block.Index - 1)
+			if err != nil {
+				return blocksAdded, blocksSkipped, fmt.Errorf("missing previous block %d: %w", block.Index-1, err)
+			}
+			if block.PrevHash != prevBlock.Hash {
+				return blocksAdded, blocksSkipped, fmt.Errorf("previous hash mismatch at block %d", block.Index)
+			}
+		}
+
+		// Save block to storage
+		if err := bc.storage.SaveBlock(block); err != nil {
+			return blocksAdded, blocksSkipped, fmt.Errorf("failed to save block %d: %w", block.Index, err)
+		}
+
+		blocksAdded++
+	}
+
+	return blocksAdded, blocksSkipped, nil
+}

@@ -7,6 +7,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/blindxfish/truthchain/blockchain"
 	"github.com/blindxfish/truthchain/chain"
 	"github.com/blindxfish/truthchain/miner"
 	"github.com/blindxfish/truthchain/store"
@@ -19,6 +20,7 @@ type TrustNetwork struct {
 	Wallet        *wallet.Wallet
 	Storage       *store.BoltDBStorage
 	UptimeTracker *miner.UptimeTracker
+	Blockchain    *blockchain.Blockchain
 
 	// Network components
 	TrustEngine   *TrustEngine
@@ -40,6 +42,13 @@ type TrustNetwork struct {
 	MessageChan chan NetworkMessage
 	PeerChan    chan PeerEvent
 	StopChan    chan struct{}
+
+	// Maps for deduplication
+	postSeen     map[string]bool
+	transferSeen map[string]bool
+
+	// Add recentMsgHashes for loop prevention
+	recentMsgHashes map[string]int64 // hash -> timestamp
 }
 
 // NetworkMessage represents a message sent through the network
@@ -86,6 +95,7 @@ func NewTrustNetwork(
 	wallet *wallet.Wallet,
 	storage *store.BoltDBStorage,
 	uptimeTracker *miner.UptimeTracker,
+	blockchain *blockchain.Blockchain,
 	listenPort int,
 ) *TrustNetwork {
 
@@ -94,6 +104,7 @@ func NewTrustNetwork(
 		Wallet:        wallet,
 		Storage:       storage,
 		UptimeTracker: uptimeTracker,
+		Blockchain:    blockchain,
 
 		TrustEngine:   NewTrustEngine(),
 		Topology:      NewNetworkTopology(nodeID),
@@ -109,6 +120,12 @@ func NewTrustNetwork(
 		MessageChan: make(chan NetworkMessage, 100),
 		PeerChan:    make(chan PeerEvent, 50),
 		StopChan:    make(chan struct{}),
+
+		postSeen:     make(map[string]bool),
+		transferSeen: make(map[string]bool),
+
+		// Initialize recentMsgHashes
+		recentMsgHashes: make(map[string]int64),
 	}
 
 	// Set up message router
@@ -140,6 +157,7 @@ func (tn *TrustNetwork) Start() error {
 	go tn.messageProcessor()
 	go tn.trustUpdater()
 	go tn.meshListener() // Listen for inbound mesh connections
+	go tn.cleanupMsgHashCache()
 
 	log.Printf("TrustNetwork started on port %d", tn.ListenPort)
 	return nil
@@ -232,8 +250,7 @@ func (tn *TrustNetwork) BroadcastPost(post *chain.Post) error {
 
 	// Also broadcast to mesh peers
 	if tn.MeshManager != nil {
-		// TODO: Serialize message and send via mesh
-		log.Printf("Broadcasting post to mesh: %s", post.Hash)
+		_ = tn.MeshManager.SendNetworkMessage(&msg)
 	}
 
 	log.Printf("Broadcasting post: %s", post.Hash)
@@ -263,8 +280,7 @@ func (tn *TrustNetwork) BroadcastTransfer(transfer *chain.Transfer) error {
 
 	// Also broadcast to mesh peers
 	if tn.MeshManager != nil {
-		// TODO: Serialize message and send via mesh
-		log.Printf("Broadcasting transfer to mesh: %s", transfer.Hash)
+		_ = tn.MeshManager.SendNetworkMessage(&msg)
 	}
 
 	log.Printf("Broadcasting transfer: %s", transfer.Hash)
@@ -438,7 +454,41 @@ func (tn *TrustNetwork) handlePostMessage(msg NetworkMessage) {
 		return
 	}
 
-	// Validate post (this will be implemented in the next phase)
+	// Check TTL
+	if msg.TTL <= 0 {
+		return // Drop message
+	}
+
+	// Check hash in recentMsgHashes
+	hash := post.Hash
+	if tn.recentMsgHashes == nil {
+		tn.recentMsgHashes = make(map[string]int64)
+	}
+	tn.mu.Lock()
+	if _, seen := tn.recentMsgHashes[hash]; seen {
+		tn.mu.Unlock()
+		return // Already seen, drop
+	}
+	// Add to cache
+	tn.recentMsgHashes[hash] = time.Now().Unix()
+	tn.mu.Unlock()
+
+	// Validate post (signature, etc)
+	if err := post.ValidatePost(); err != nil {
+		log.Printf("Invalid post received: %v", err)
+		return
+	}
+	// Add to pending posts (if not present)
+	if err := tn.Storage.SavePendingPost(*post); err != nil {
+		log.Printf("Failed to add post to pending: %v", err)
+		return
+	}
+	// Gossip to selected peers
+	if msg.TTL > 1 {
+		msg.TTL--
+		tn.gossipToPeers(&msg, msg.Source)
+	}
+
 	log.Printf("Received post from %s: %s", msg.Source, post.Hash)
 }
 
@@ -450,7 +500,29 @@ func (tn *TrustNetwork) handleTransferMessage(msg NetworkMessage) {
 		return
 	}
 
-	// Validate transfer (this will be implemented in the next phase)
+	if tn.transferSeen == nil {
+		tn.transferSeen = make(map[string]bool)
+	}
+	if tn.transferSeen[transfer.Hash] {
+		return // Already seen
+	}
+	tn.transferSeen[transfer.Hash] = true
+	// Validate transfer
+	if err := transfer.Validate(); err != nil {
+		log.Printf("Invalid transfer received: %v", err)
+		return
+	}
+	// Add to transfer pool (if not present)
+	if err := tn.Blockchain.AddTransfer(*transfer); err != nil {
+		log.Printf("Failed to add transfer to pool: %v", err)
+		return
+	}
+	// Gossip to selected peers
+	if msg.TTL > 1 {
+		msg.TTL--
+		tn.gossipToPeers(&msg, msg.Source)
+	}
+
 	log.Printf("Received transfer from %s: %s", msg.Source, transfer.Hash)
 }
 
@@ -542,4 +614,59 @@ func (tn *TrustNetwork) meshListener() {
 			go tn.MeshManager.AcceptInboundConnection(conn, remoteAddr)
 		}
 	}
+}
+
+// Add cleanupMsgHashCache method to TrustNetwork
+func (tn *TrustNetwork) cleanupMsgHashCache() {
+	ticker := time.NewTicker(10 * time.Minute)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ticker.C:
+			now := time.Now().Unix()
+			tn.mu.Lock()
+			for hash, ts := range tn.recentMsgHashes {
+				if now-ts > 3600 { // 1 hour
+					delete(tn.recentMsgHashes, hash)
+				}
+			}
+			tn.mu.Unlock()
+		case <-tn.StopChan:
+			return
+		}
+	}
+}
+
+// Add gossipToPeers method to TrustNetwork
+func (tn *TrustNetwork) gossipToPeers(msg *NetworkMessage, excludePeer string) {
+	if tn.MeshManager == nil {
+		return
+	}
+
+	// Get connected peers
+	peers := tn.PeerTable.GetConnectedPeers()
+	if len(peers) == 0 {
+		return
+	}
+
+	// Select subset for forwarding (3-5 peers, diverse selection)
+	targetCount := 3
+	if len(peers) < targetCount {
+		targetCount = len(peers)
+	}
+
+	// Use peer selection logic for diverse forwarding
+	selectedPeers := tn.PeerTable.SelectPeers(targetCount)
+
+	// Forward to selected peers (excluding source)
+	for _, peer := range selectedPeers {
+		if peer.Address != excludePeer {
+			// TODO: Implement peer-specific forwarding
+			// For now, use the mesh manager's broadcast
+			log.Printf("Gossiping to peer: %s", peer.Address)
+		}
+	}
+
+	// Use mesh manager to send to selected peers
+	_ = tn.MeshManager.SendNetworkMessage(msg)
 }
