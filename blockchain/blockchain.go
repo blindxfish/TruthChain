@@ -851,10 +851,11 @@ func (bc *Blockchain) createTimeBasedBlock() error {
 		Posts:     []chain.Post{},        // Empty block - no posts
 		Transfers: []chain.Transfer{},    // No transfers
 		StateRoot: latestBlock.StateRoot, // Keep same state root since no changes
+		CharCount: 0,                     // No characters in empty block
 	}
 
-	// Calculate block hash
-	newBlock.CalculateHash()
+	// Calculate and set block hash
+	newBlock.SetHash()
 
 	// Save the block
 	if err := bc.storage.SaveBlock(newBlock); err != nil {
