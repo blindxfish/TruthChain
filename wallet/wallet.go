@@ -2,6 +2,7 @@ package wallet
 
 import (
 	"crypto/ecdsa"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/pem"
@@ -13,7 +14,6 @@ import (
 	"github.com/btcsuite/btcd/btcec/v2"
 	btcecdsa "github.com/btcsuite/btcd/btcec/v2/ecdsa"
 	"github.com/btcsuite/btcutil/base58"
-	secp "github.com/decred/dcrd/dcrec/secp256k1/v4"
 	"golang.org/x/crypto/ripemd160"
 )
 
@@ -36,8 +36,8 @@ type WalletMetadata struct {
 
 // Wallet represents a TruthChain wallet with secp256k1 keypair
 type Wallet struct {
-	PrivateKey *secp.PrivateKey
-	PublicKey  *secp.PublicKey
+	PrivateKey *btcec.PrivateKey
+	PublicKey  *btcec.PublicKey
 	Address    string
 	Metadata   *WalletMetadata
 }
@@ -49,7 +49,7 @@ func NewWallet() (*Wallet, error) {
 
 // NewWalletWithMetadata creates a new wallet with custom metadata
 func NewWalletWithMetadata(name string, versionByte byte) (*Wallet, error) {
-	privateKey, err := secp.GeneratePrivateKey()
+	privateKey, err := btcec.NewPrivateKey()
 	if err != nil {
 		return nil, fmt.Errorf("failed to generate private key: %w", err)
 	}
@@ -93,11 +93,11 @@ func LoadWallet(walletPath string) (*Wallet, error) {
 	}
 
 	// Validate private key length
-	if len(block.Bytes) != secp.PrivKeyBytesLen {
-		return nil, fmt.Errorf("invalid private key length: expected %d bytes, got %d", secp.PrivKeyBytesLen, len(block.Bytes))
+	if len(block.Bytes) != btcec.PrivKeyBytesLen {
+		return nil, fmt.Errorf("invalid private key length: expected %d bytes, got %d", btcec.PrivKeyBytesLen, len(block.Bytes))
 	}
 
-	privateKey := secp.PrivKeyFromBytes(block.Bytes)
+	privateKey, _ := btcec.PrivKeyFromBytes(block.Bytes)
 
 	// Try to load metadata from separate file
 	metadataPath := walletPath + ".meta"
@@ -221,7 +221,7 @@ func (w *Wallet) Verify(data []byte, signature []byte) (bool, error) {
 }
 
 // VerifySignature verifies a signature against data and a given public key
-func VerifySignature(data []byte, signature []byte, publicKey *secp.PublicKey) (bool, error) {
+func VerifySignature(data []byte, signature []byte, publicKey *btcec.PublicKey) (bool, error) {
 	// Hash the data first
 	hash := sha256.Sum256(data)
 
@@ -230,12 +230,12 @@ func VerifySignature(data []byte, signature []byte, publicKey *secp.PublicKey) (
 }
 
 // generateAddress creates a Bitcoin-style Base58Check address from the public key
-func generateAddress(publicKey *secp.PublicKey) string {
+func generateAddress(publicKey *btcec.PublicKey) string {
 	return generateAddressWithVersion(publicKey, TruthChainMainnetVersion)
 }
 
 // generateAddressWithVersion creates a Bitcoin-style Base58Check address with custom version byte
-func generateAddressWithVersion(publicKey *secp.PublicKey, versionByte byte) string {
+func generateAddressWithVersion(publicKey *btcec.PublicKey, versionByte byte) string {
 	// Get compressed public key bytes
 	pubBytes := publicKey.SerializeCompressed()
 
@@ -340,4 +340,46 @@ func DeriveAddress(pub *btcec.PublicKey) string {
 // NewMultisigWallet creates a new wallet for multisig (placeholder for future implementation)
 func NewMultisigWallet(name string) (*Wallet, error) {
 	return NewWalletWithMetadata(name, TruthChainMultisigVersion)
+}
+
+// SignMessage signs a message with a private key and returns hex-encoded signature
+func SignMessage(message []byte, privateKey *ecdsa.PrivateKey) (string, error) {
+	// Create hash of the message
+	hash := sha256.Sum256(message)
+
+	// Sign the hash
+	signature, err := ecdsa.SignASN1(rand.Reader, privateKey, hash[:])
+	if err != nil {
+		return "", fmt.Errorf("failed to sign message: %w", err)
+	}
+
+	// Return hex-encoded signature
+	return hex.EncodeToString(signature), nil
+}
+
+// RecoverPublicKeyFromSignature recovers the public key from a compact signature and message hash (hex)
+func RecoverPublicKeyFromSignature(messageHash string, signatureHex string) (*btcec.PublicKey, error) {
+	sigBytes, err := hex.DecodeString(signatureHex)
+	if err != nil {
+		return nil, fmt.Errorf("invalid signature encoding: %w", err)
+	}
+
+	hashBytes, err := hex.DecodeString(messageHash)
+	if err != nil {
+		return nil, fmt.Errorf("invalid hash encoding: %w", err)
+	}
+
+	// Use btcecdsa.RecoverCompact to recover the public key
+	recoveredPubKey, _, err := btcecdsa.RecoverCompact(sigBytes, hashBytes)
+	if err != nil {
+		return nil, fmt.Errorf("failed to recover public key: %w", err)
+	}
+
+	return recoveredPubKey, nil
+}
+
+// PublicKeyToAddress converts a public key to a TruthChain address
+func PublicKeyToAddress(publicKey *btcec.PublicKey) string {
+	// Use the same logic as the wallet's address generation
+	return generateAddressWithVersion(publicKey, TruthChainMainnetVersion)
 }

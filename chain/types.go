@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"sort"
 	"time"
 )
 
@@ -17,14 +18,31 @@ type Post struct {
 	Hash      string `json:"hash"`      // hash of the post
 }
 
+// WalletState represents the state of a wallet at a given block
+type WalletState struct {
+	Address    string `json:"address"`      // Wallet address
+	Balance    int    `json:"balance"`      // Character balance
+	Nonce      int64  `json:"nonce"`        // Transaction nonce
+	LastTxTime int64  `json:"last_tx_time"` // Timestamp of last transaction
+}
+
+// StateRoot represents the global state at a given block
+type StateRoot struct {
+	Wallets    []WalletState `json:"wallets"`     // Sorted wallet states
+	Hash       string        `json:"hash"`        // Hash of the state root
+	BlockIndex int           `json:"block_index"` // Block this state belongs to
+}
+
 // Block represents a block in the TruthChain blockchain
 type Block struct {
-	Index     int    `json:"index"`      // block index
-	Timestamp int64  `json:"timestamp"`  // Unix timestamp
-	PrevHash  string `json:"prev_hash"`  // hash of previous block
-	Hash      string `json:"hash"`       // hash of this block
-	Posts     []Post `json:"posts"`      // posts in this block
-	CharCount int    `json:"char_count"` // total characters in this block
+	Index     int        `json:"index"`      // block index
+	Timestamp int64      `json:"timestamp"`  // Unix timestamp
+	PrevHash  string     `json:"prev_hash"`  // hash of previous block
+	Hash      string     `json:"hash"`       // hash of this block
+	Posts     []Post     `json:"posts"`      // posts in this block
+	Transfers []Transfer `json:"transfers"`  // transfers in this block
+	StateRoot *StateRoot `json:"state_root"` // global state root
+	CharCount int        `json:"char_count"` // total characters in this block
 }
 
 // PostRequest represents a request to create a new post
@@ -82,6 +100,57 @@ func (p *Post) GetCharacterCount() int {
 	return len(p.Content)
 }
 
+// CalculateHash calculates the hash of a state root
+func (sr *StateRoot) CalculateHash() string {
+	// Sort wallets by address for deterministic hashing
+	sortedWallets := make([]WalletState, len(sr.Wallets))
+	copy(sortedWallets, sr.Wallets)
+
+	sort.Slice(sortedWallets, func(i, j int) bool {
+		return sortedWallets[i].Address < sortedWallets[j].Address
+	})
+
+	// Create deterministic JSON representation
+	stateData := map[string]interface{}{
+		"block_index": sr.BlockIndex,
+		"wallets":     sortedWallets,
+	}
+
+	jsonData, err := json.Marshal(stateData)
+	if err != nil {
+		return "" // This shouldn't happen with valid data
+	}
+
+	hash := sha256.Sum256(jsonData)
+	return hex.EncodeToString(hash[:])
+}
+
+// SetHash sets the hash field of the state root
+func (sr *StateRoot) SetHash() {
+	sr.Hash = sr.CalculateHash()
+}
+
+// GetWalletState returns the state for a specific wallet
+func (sr *StateRoot) GetWalletState(address string) (*WalletState, bool) {
+	for _, wallet := range sr.Wallets {
+		if wallet.Address == address {
+			return &wallet, true
+		}
+	}
+	return nil, false
+}
+
+// UpdateWalletState updates or adds a wallet state
+func (sr *StateRoot) UpdateWalletState(wallet WalletState) {
+	for i, existing := range sr.Wallets {
+		if existing.Address == wallet.Address {
+			sr.Wallets[i] = wallet
+			return
+		}
+	}
+	sr.Wallets = append(sr.Wallets, wallet)
+}
+
 // CalculateHash calculates the hash of a block
 func (b *Block) CalculateHash() string {
 	// Create a deterministic string representation
@@ -90,6 +159,16 @@ func (b *Block) CalculateHash() string {
 	// Include post hashes for immutability
 	for _, post := range b.Posts {
 		data += post.Hash
+	}
+
+	// Include transfer hashes for immutability
+	for _, transfer := range b.Transfers {
+		data += transfer.Hash
+	}
+
+	// Include state root hash
+	if b.StateRoot != nil {
+		data += b.StateRoot.Hash
 	}
 
 	hash := sha256.Sum256([]byte(data))
@@ -119,7 +198,27 @@ func (b *Block) ValidateBlock() error {
 	// Validate all posts in the block
 	for i, post := range b.Posts {
 		if err := post.ValidatePost(); err != nil {
-			return fmt.Errorf("invalid post at index %d: %w", i, err)
+			return fmt.Errorf("invalid post at index %d: %v", i, err)
+		}
+	}
+
+	// Validate all transfers in the block
+	for i, transfer := range b.Transfers {
+		if err := transfer.Validate(); err != nil {
+			return fmt.Errorf("invalid transfer at index %d: %v", i, err)
+		}
+	}
+
+	// Validate state root if present
+	if b.StateRoot != nil {
+		if b.StateRoot.BlockIndex != b.Index {
+			return fmt.Errorf("state root block index mismatch: expected %d, got %d", b.Index, b.StateRoot.BlockIndex)
+		}
+
+		// Verify state root hash
+		calculatedHash := b.StateRoot.CalculateHash()
+		if b.StateRoot.Hash != calculatedHash {
+			return fmt.Errorf("state root hash mismatch: expected %s, got %s", calculatedHash, b.StateRoot.Hash)
 		}
 	}
 
@@ -188,6 +287,11 @@ func (b *Block) GetPostCount() int {
 	return len(b.Posts)
 }
 
+// GetTransferCount returns the number of transfers in the block
+func (b *Block) GetTransferCount() int {
+	return len(b.Transfers)
+}
+
 // AddPost adds a post to the block and updates the character count
 func (b *Block) AddPost(post Post) error {
 	if err := post.ValidatePost(); err != nil {
@@ -202,6 +306,25 @@ func (b *Block) AddPost(post Post) error {
 	b.Posts = append(b.Posts, post)
 	b.CharCount = b.GetCharacterCount()
 
+	return nil
+}
+
+// AddTransfer adds a transfer to the block
+func (b *Block) AddTransfer(transfer Transfer) error {
+	if err := transfer.Validate(); err != nil {
+		return fmt.Errorf("invalid transfer: %w", err)
+	}
+
+	// Set the transfer hash if not already set
+	if transfer.Hash == "" {
+		hash, err := transfer.CalculateHash()
+		if err != nil {
+			return fmt.Errorf("failed to calculate transfer hash: %w", err)
+		}
+		transfer.Hash = hash
+	}
+
+	b.Transfers = append(b.Transfers, transfer)
 	return nil
 }
 
@@ -227,25 +350,38 @@ func CreateGenesisBlock() *Block {
 		Timestamp: MainnetGenesisTimestamp,
 		PrevHash:  "",
 		Posts:     []Post{},
+		Transfers: []Transfer{},
+		StateRoot: &StateRoot{
+			Wallets:    []WalletState{},
+			BlockIndex: 0,
+		},
 		CharCount: 0,
 	}
+	block.StateRoot.SetHash()
 	block.SetHash()
 	return block
 }
 
-// CreateBlock creates a new block with the given posts
-func CreateBlock(index int, prevHash string, posts []Post) *Block {
+// CreateBlock creates a new block with the given posts and transfers
+func CreateBlock(index int, prevHash string, posts []Post, transfers []Transfer, stateRoot *StateRoot) *Block {
 	block := &Block{
 		Index:     index,
 		Timestamp: time.Now().Unix(),
 		PrevHash:  prevHash,
 		Posts:     posts,
+		Transfers: transfers,
+		StateRoot: stateRoot,
 		CharCount: 0,
 	}
 
 	// Calculate character count
 	for _, post := range posts {
 		block.CharCount += post.GetCharacterCount()
+	}
+
+	// Set state root hash if provided
+	if block.StateRoot != nil {
+		block.StateRoot.SetHash()
 	}
 
 	block.SetHash()

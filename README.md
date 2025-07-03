@@ -12,7 +12,7 @@ In a world where political figures, corporations, and media entities frequently 
 - **One "character"** = one UTF-8 text character stored on-chain
 - **Earned** by keeping the network alive (running a node)
 - **Burned** to post messages
-- **Transferable** between users
+- **Transferable** between users with secure ECDSA signatures
 
 ### Daily Character Cap
 - **280,000 characters per day** (≈1,000 Twitter-length posts)
@@ -20,26 +20,35 @@ In a world where political figures, corporations, and media entities frequently 
 - Early adopters earn more, encouraging network bootstrapping
 
 ### Immutable Posts
-- All posts are cryptographically signed
+- All posts are cryptographically signed with ECDSA
 - Stored permanently on-chain
 - Cannot be modified or deleted
 - Verifiable authorship and timestamp
 
+### Secure Transfers
+- Character transfers signed with ECDSA private keys
+- Public key recovery for signature verification
+- Nonce-based replay protection
+- Gas fees for network sustainability (1 character)
+
 ## 🏗️ Technical Architecture
 
 ### Core Components
-- **Wallet System**: ECDSA key generation, signing, storage
-- **Block & Post Logic**: Hash, sign, and verify methods
-- **Local Storage**: BoltDB for persistent data
+- **Wallet System**: ECDSA key generation, signing, storage with Base58Check addresses
+- **Block & Post Logic**: Hash, sign, and verify methods with secure signature recovery
+- **Transfer System**: Signed character transfers with validation and state management
+- **Local Storage**: BoltDB for persistent data with mempool persistence
 - **Uptime Tracker**: Character reward distribution
 - **HTTP API**: Local interface for frontends
-- **Character Transfer**: User-to-user transactions
+- **State Manager**: Wallet states, balances, and nonce tracking
 
 ### Security Model
-- All posts and transfers signed with private keys
+- All posts and transfers signed with ECDSA private keys
+- Public key recovery from compact signatures ensures authorship validation
 - Local API only (127.0.0.1) - no exposed network ports by default
 - Frontends act as display + signing tools
 - Node is the source of truth
+- Fork protection with hardcoded mainnet rules
 
 ## 📊 Economic Model
 
@@ -56,10 +65,17 @@ Nodes earn characters based on uptime, not proof-of-work. Character issuance dec
 | 10,000       | ~27                     | 280,000                  |
 | 100,000      | ~2.7                    | 280,000                  |
 
+### Transfer Economy
+- **Gas Fee**: 1 character per transfer (fixed)
+- **Transfer Cost**: Amount + 1 character gas fee
+- **Nonce System**: Prevents replay attacks and ensures transaction ordering
+- **State Management**: Real-time balance tracking with pending transaction consideration
+
 ### Incentive Structure
 - Characters become scarcer and more valuable over time
 - Users must run a node or obtain characters from others to post
 - Early adoption is rewarded with higher daily earnings
+- Transfer fees provide network sustainability
 
 ## 🚀 Implementation Roadmap
 
@@ -168,9 +184,31 @@ curl -X POST -H "Content-Type: application/json" \
 }
 ```
 
-### Milestone 6: Character Transfer ⏳ **PENDING**
-- ⏳ Add signed transfer payload format
-- ⏳ Update balances on both sides
+**POST /characters/send**
+```json
+{
+  "success": true,
+  "transfer": {
+    "from": "1EAWe46tZvy1KGpcsU3sbJMcL7XmM7yrwT",
+    "to": "1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa",
+    "amount": 50,
+    "gas_fee": 1,
+    "total_cost": 51
+  },
+  "new_balance": 1199
+}
+```
+
+### Milestone 6: Character Transfer ✅ **COMPLETE**
+- ✅ **Signed transfer payload format** with ECDSA signatures
+- ✅ **Public key recovery** from compact signatures for verification
+- ✅ **Transfer validation** with balance and nonce checks
+- ✅ **Transfer pool** for pending transactions
+- ✅ **State management** with wallet states and balances
+- ✅ **CLI commands** for transfer operations
+- ✅ **API endpoints** for transfer functionality
+- ✅ **Gas fee system** (1 character per transfer)
+- ✅ **Nonce tracking** for replay protection
 
 ### Milestone 7: Post Validator & Chain Sync ⏳ **PENDING**
 - ⏳ Validate signature and balance for incoming posts
@@ -183,11 +221,11 @@ curl -X POST -H "Content-Type: application/json" \
 
 ```
 truthchain/
-├── cmd/            # main.go entry point
+├── cmd/            # main.go entry point with comprehensive CLI
 ├── api/            # Local HTTP API for frontends
-├── chain/          # Block, post, hash logic
-├── wallet/         # Key management, signing
-├── store/          # BoltDB logic
+├── chain/          # Block, post, transfer logic and state management
+├── wallet/         # Key management, signing, address derivation
+├── store/          # BoltDB logic for persistent storage
 ├── miner/          # Uptime tracker & reward logic
 └── utils/          # Hashing, encoding, common tools
 ```
@@ -196,18 +234,38 @@ truthchain/
 
 ```go
 type Post struct {
-    Author    string // public key
+    Author    string // public key address
     Signature string // signed content hash
     Content   string // text (counted in chars)
     Timestamp int64
 }
 
+type Transfer struct {
+    From      string // sender address
+    To        string // recipient address
+    Amount    int    // number of characters
+    GasFee    int    // gas fee (always 1)
+    Timestamp int64  // unix timestamp
+    Nonce     int64  // unique transaction number
+    Hash      string // transaction hash
+    Signature string // ECDSA signature
+}
+
 type Block struct {
-    Index     int
-    Timestamp int64
-    PrevHash  string
-    Hash      string
-    Posts     []Post
+    Index       int
+    Timestamp   int64
+    PrevHash    string
+    Hash        string
+    Posts       []Post
+    Transfers   []Transfer
+    StateRoot   *StateRoot
+}
+
+type WalletState struct {
+    Address    string
+    Balance    int
+    Nonce      int64
+    LastTxTime int64
 }
 ```
 
@@ -236,8 +294,9 @@ Daily cap ensures chain size grows at a predictable rate:
 
 ## 🛡️ Security Features
 
-- **Cryptographic Signing**: All posts and transfers signed with private keys
+- **Cryptographic Signing**: All posts and transfers signed with ECDSA private keys
 - **Secure Signature Verification**: Public key recovery from compact ECDSA signatures ensures authorship validation
+- **Address Derivation**: Consistent Base58Check address generation from public keys
 - **Immutable Storage**: Once posted, content cannot be modified
 - **Censorship Resistance**: Distributed network prevents single points of failure
 - **Verifiable History**: Complete audit trail of all posts and transfers
@@ -245,6 +304,8 @@ Daily cap ensures chain size grows at a predictable rate:
 - **Genesis Block Validation**: Ensures all nodes start from the same chain
 - **Post Count Thresholds**: Configurable block creation rules with validation
 - **Mempool Persistence**: Pending posts survive node restarts
+- **Transfer Security**: Nonce-based replay protection and balance validation
+- **State Management**: Real-time wallet state tracking with pending transaction consideration
 
 ## 📚 Documentation
 
@@ -253,35 +314,63 @@ Daily cap ensures chain size grows at a predictable rate:
 
 ## 🖥️ CLI Usage
 
-### Wallet Management (Milestone 1 ✅)
+### Quick Start
+
+```bash
+# Build the application
+go build -o truthchain.exe cmd/main.go
+
+# Show wallet information
+./truthchain.exe --show-wallet --debug
+
+# Add balance for testing
+./truthchain.exe --add-balance 1000
+
+# Create a post
+./truthchain.exe --post "Hello, TruthChain!"
+
+# Send characters to another address
+./truthchain.exe --send 1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa --amount 100
+
+# Start API server
+./truthchain.exe --api-port 8080
+
+# Monitor mode
+./truthchain.exe --monitor
+```
+
+### Wallet Management ✅ **COMPLETE**
 
 The TruthChain CLI provides comprehensive wallet management capabilities:
 
 #### Basic Wallet Operations
 ```bash
 # Show wallet information
-go run cmd/main.go --show-wallet
+./truthchain.exe --show-wallet
 
 # Show detailed wallet information including metadata
-go run cmd/main.go --show-wallet --debug
+./truthchain.exe --show-wallet --debug
 
 # Create a new mainnet wallet (default)
-go run cmd/main.go --wallet my-wallet.key
+./truthchain.exe --wallet my-wallet.key
 
 # Create a named wallet
-go run cmd/main.go --wallet my-wallet.key --name "My TruthChain Wallet"
+./truthchain.exe --wallet my-wallet.key --name "My TruthChain Wallet"
+
+# Add balance for testing
+./truthchain.exe --add-balance 1000
 ```
 
 #### Multi-Network Support
 ```bash
 # Create mainnet wallet (default)
-go run cmd/main.go --network mainnet --name "Mainnet Wallet"
+./truthchain.exe --network mainnet --name "Mainnet Wallet"
 
 # Create testnet wallet for development/testing
-go run cmd/main.go --network testnet --name "Testnet Wallet"
+./truthchain.exe --network testnet --name "Testnet Wallet"
 
 # Create multisig wallet (placeholder for future implementation)
-go run cmd/main.go --network multisig --name "Multisig Wallet"
+./truthchain.exe --network multisig --name "Multisig Wallet"
 ```
 
 #### Command Line Options
@@ -292,60 +381,158 @@ go run cmd/main.go --network multisig --name "Multisig Wallet"
 | `--debug` | Show additional wallet information | `false` |
 | `--network` | Network type: mainnet, testnet, multisig | `mainnet` |
 | `--name` | Wallet name for new wallets | `""` |
+| `--add-balance` | Add balance to current wallet (for testing) | `0` |
 
 #### Example Output
 ```bash
-$ go run cmd/main.go --show-wallet --debug --network testnet --name "Test Wallet"
-Wallet Address: 1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa
+$ ./truthchain.exe --show-wallet --debug
+Wallet Address: 1EAWe46tZvy1KGpcsU3sbJMcL7XmM7yrwT
 Wallet File: wallet.key
-Network: testnet
-Public Key (compressed): 02a1b2c3d4e5f6...
-Public Key (uncompressed): 04a1b2c3d4e5f6...
-Version Byte: 0x6F
+Network: mainnet
+Public Key (compressed): 034cda2828b115a2faaf67cbb3a64d434dbe59e8a7382fe289837e9c2428d1ccd9
+Public Key (uncompressed): 044cda2828b115a2faaf67cbb3a64d434dbe59e8a7382fe289837e9c2428d1ccd9c1f4a44cba4d05c2aa28b15dfd3039ac875759a64b50bb47213efac95661a37b
+Version Byte: 0x00
 Address Valid: true
-Wallet Name: Test Wallet
-Created: 2024-01-15 10:30:45
-Last Used: 2024-01-15 10:30:45
+Wallet Name: wallet.key
+Created: 2025-07-03 10:48:45
+Last Used: 2025-07-03 10:48:45
 ```
 
-### CLI Features
+### Blockchain Operations ✅ **COMPLETE**
 
-#### Milestone 2 & 3: Block, Post & Storage ✅ **AVAILABLE**
+#### Posts and Blocks
 ```bash
-# Post a message to the blockchain (5 posts trigger block creation)
-go run cmd/main.go --post "Hello, TruthChain!"
+# Post a message to the blockchain (5 posts trigger block creation by default)
+./truthchain.exe --post "Hello, TruthChain!"
 
 # View recent posts and pending mempool
-go run cmd/main.go --posts
+./truthchain.exe --posts
 
 # View blockchain status and statistics
-go run cmd/main.go --status
+./truthchain.exe --status
 
 # View recent blocks
-go run cmd/main.go --blocks
+./truthchain.exe --blocks
 
 # View mempool (pending posts)
-go run cmd/main.go --mempool
+./truthchain.exe --mempool
 
 # Force create a block from pending posts
-go run cmd/main.go --force-block
+./truthchain.exe --force-block
 
 # Use custom post threshold (for testing)
-go run cmd/main.go --post-threshold 3 --post "Test post"
+./truthchain.exe --post-threshold 3 --post "Test post"
 ```
 
-#### Milestone 6: Character Transfer
+### Transfer System ✅ **COMPLETE**
+
+#### Character Transfers
 ```bash
 # Send characters to another address
-go run cmd/main.go --send 1000 --to 1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa
+./truthchain.exe --send 1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa --amount 100
 
-# Check character balance
-go run cmd/main.go --balance
+# Show transfer pool information
+./truthchain.exe --show-transfers
+
+# Process pending transfers
+./truthchain.exe --process-transfers
+
+# Show current state and wallet information
+./truthchain.exe --show-state
+
+# Show all wallet states
+./truthchain.exe --show-wallets
+```
+
+#### Transfer Command Options
+| Flag | Description | Example |
+|------|-------------|---------|
+| `--send` | Recipient address | `--send 1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa` |
+| `--amount` | Amount of characters to send | `--amount 100` |
+| `--show-transfers` | Show transfer pool information | `--show-transfers` |
+| `--process-transfers` | Process transfers | `--process-transfers` |
+| `--show-state` | Show blockchain state | `--show-state` |
+| `--show-wallets` | Show wallet states | `--show-wallets` |
+
+#### Example Transfer Output
+```bash
+$ ./truthchain.exe --send 1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa --amount 100
+✅ Transfer created successfully!
+From: 1EAWe46tZvy1KGpcsU3sbJMcL7XmM7yrwT
+To: 1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa
+Amount: 100 characters
+Gas Fee: 1 character
+Total Cost: 101 characters
+Hash: abc123def456...
+Nonce: 1
+```
+
+### Monitoring and API ✅ **COMPLETE**
+
+#### Live Monitoring
+```bash
+# Start live monitoring dashboard
+./truthchain.exe --monitor
+```
+
+#### API Server
+```bash
+# Start HTTP API server
+./truthchain.exe --api-port 8080
+
+# Test API endpoints
+curl http://localhost:8080/status
+curl http://localhost:8080/wallet
+curl http://localhost:8080/balance
+```
+
+### Complete Command Reference
+
+| Command | Description | Example |
+|---------|-------------|---------|
+| `--show-wallet` | Display wallet information | `--show-wallet --debug` |
+| `--add-balance` | Add balance for testing | `--add-balance 1000` |
+| `--post` | Create a post | `--post "Hello, TruthChain!"` |
+| `--posts` | Show recent posts | `--posts` |
+| `--status` | Show blockchain status | `--status` |
+| `--blocks` | Show recent blocks | `--blocks` |
+| `--mempool` | Show pending posts | `--mempool` |
+| `--send` | Send characters | `--send <address> --amount <amount>` |
+| `--show-transfers` | Show transfer pool | `--show-transfers` |
+| `--process-transfers` | Process transfers | `--process-transfers` |
+| `--show-state` | Show blockchain state | `--show-state` |
+| `--show-wallets` | Show wallet states | `--show-wallets` |
+| `--api-port` | Start API server | `--api-port 8080` |
+| `--monitor` | Live monitoring | `--monitor` |
+
+## 🧪 Testing
+
+The system includes comprehensive tests for all components:
+
+```bash
+# Run all tests
+go test ./...
+
+# Run specific test suites
+go test ./blockchain/...
+go test ./chain/...
+go test ./wallet/...
+go test ./store/...
+go test ./api/...
+
+# Run transfer tests specifically
+go test ./blockchain/... -run "Test.*Transfer"
 ```
 
 ## 🤝 Contributing
 
 This project is in active development. Contributions are welcome! Please refer to the implementation roadmap above to understand the current development status.
+
+### Development Guidelines
+- Follow Go best practices and conventions
+- Add tests for new features
+- Update documentation for API changes
+- Ensure all tests pass before submitting PRs
 
 ## 📄 License
 
@@ -375,4 +562,4 @@ SOFTWARE.
 
 ---
 
-**TruthChain** - Preserving truth, one character at a time.
+**TruthChain** - Preserving truth, one character at a time. 🚀

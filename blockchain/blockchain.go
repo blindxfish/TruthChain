@@ -16,9 +16,11 @@ import (
 // Blockchain represents the TruthChain blockchain with persistent storage
 type Blockchain struct {
 	storage       store.Storage
-	PendingPosts  []chain.Post `json:"pending_posts"`
-	PostThreshold int          `json:"post_threshold"` // Number of posts needed to create a block
-	mu            sync.RWMutex `json:"-"`
+	stateManager  *chain.StateManager
+	PendingPosts  []chain.Post        `json:"pending_posts"`
+	TransferPool  *chain.TransferPool `json:"transfer_pool"`
+	PostThreshold int                 `json:"post_threshold"` // Number of posts needed to create a block
+	mu            sync.RWMutex        `json:"-"`
 }
 
 // NewBlockchain creates a new blockchain with persistent storage
@@ -30,7 +32,9 @@ func NewBlockchain(storage store.Storage, postThreshold int) (*Blockchain, error
 
 	bc := &Blockchain{
 		storage:       storage,
+		stateManager:  chain.NewStateManager(),
 		PendingPosts:  []chain.Post{},
+		TransferPool:  chain.NewTransferPool(),
 		PostThreshold: postThreshold,
 	}
 
@@ -65,7 +69,29 @@ func NewBlockchain(storage store.Storage, postThreshold int) (*Blockchain, error
 	}
 	bc.PendingPosts = pendingPosts
 
+	// Initialize state from latest block
+	if err := bc.initializeState(); err != nil {
+		return nil, fmt.Errorf("failed to initialize state: %w", err)
+	}
+
 	return bc, nil
+}
+
+// initializeState loads the current state from the latest block
+func (bc *Blockchain) initializeState() error {
+	latestBlock, err := bc.storage.GetLatestBlock()
+	if err != nil {
+		return fmt.Errorf("failed to get latest block: %w", err)
+	}
+
+	// Load state from the latest block's state root
+	if latestBlock.StateRoot != nil {
+		if err := bc.stateManager.LoadStateFromStateRoot(latestBlock.StateRoot); err != nil {
+			return fmt.Errorf("failed to load state from state root: %w", err)
+		}
+	}
+
+	return nil
 }
 
 // GetLatestBlock returns the most recent block from storage
@@ -80,24 +106,7 @@ func (bc *Blockchain) GetBlockByIndex(index int) (*chain.Block, error) {
 
 // GetBlockByHash returns a block by its hash from storage
 func (bc *Blockchain) GetBlockByHash(hash string) (*chain.Block, error) {
-	// Get block count to iterate through all blocks
-	count, err := bc.storage.GetBlockCount()
-	if err != nil {
-		return nil, fmt.Errorf("failed to get block count: %w", err)
-	}
-
-	// Search through all blocks
-	for i := 0; i < count; i++ {
-		block, err := bc.storage.GetBlock(i)
-		if err != nil {
-			continue
-		}
-		if block.Hash == hash {
-			return block, nil
-		}
-	}
-
-	return nil, fmt.Errorf("block not found: %s", hash)
+	return bc.storage.GetBlockByHash(hash)
 }
 
 // GetPendingCharacterCount returns the total characters in pending posts
@@ -120,7 +129,7 @@ func (bc *Blockchain) GetPendingPostCount() int {
 	return len(bc.PendingPosts)
 }
 
-// AddPost adds a new post to the pending posts with storage integration
+// AddPost adds a post to the pending posts and validates it
 func (bc *Blockchain) AddPost(post chain.Post) error {
 	bc.mu.Lock()
 	defer bc.mu.Unlock()
@@ -158,6 +167,18 @@ func (bc *Blockchain) AddPost(post chain.Post) error {
 		if existingPost.Hash == post.Hash {
 			return fmt.Errorf("duplicate pending post: %s", post.Hash)
 		}
+	}
+
+	// Validate post author has sufficient balance for posting
+	// Posts cost 1 character per character in content
+	postCost := post.GetCharacterCount()
+
+	// Check effective balance (considering pending transfers)
+	pendingTransfers := bc.TransferPool.GetTransfers()
+	effectiveBalance := bc.stateManager.GetEffectiveBalance(post.Author, pendingTransfers)
+
+	if effectiveBalance < postCost {
+		return fmt.Errorf("insufficient balance for post: %d characters needed, effective balance: %d", postCost, effectiveBalance)
 	}
 
 	// Save post to storage
@@ -254,11 +275,43 @@ func (bc *Blockchain) createBlockFromPending() error {
 		return fmt.Errorf("failed to get latest block: %w", err)
 	}
 
+	// Get pending transfers
+	pendingTransfers := bc.TransferPool.GetTransfers()
+
+	// Apply pending transfers to state
+	for _, transfer := range pendingTransfers {
+		if err := bc.stateManager.ApplyTransfer(transfer); err != nil {
+			return fmt.Errorf("failed to apply transfer %s: %w", transfer.Hash, err)
+		}
+	}
+
+	// Apply post costs to state
+	for _, post := range bc.PendingPosts {
+		postCost := post.GetCharacterCount()
+		currentBalance, err := bc.storage.GetCharacterBalance(post.Author)
+		if err != nil {
+			return fmt.Errorf("failed to get balance for %s: %w", post.Author, err)
+		}
+
+		// Deduct post cost
+		if err := bc.storage.UpdateCharacterBalance(post.Author, -postCost); err != nil {
+			return fmt.Errorf("failed to deduct post cost for %s: %w", post.Author, err)
+		}
+
+		// Update state manager
+		bc.stateManager.UpdateWalletState(post.Author, currentBalance-postCost, 0)
+	}
+
+	// Calculate new state root
+	newStateRoot := bc.stateManager.CalculateStateRoot(latestBlock.Index + 1)
+
 	// Create new block
 	newBlock := chain.CreateBlock(
 		latestBlock.Index+1,
 		latestBlock.Hash,
 		bc.PendingPosts,
+		pendingTransfers,
+		newStateRoot,
 	)
 
 	// Validate the new block with post threshold rules
@@ -275,6 +328,9 @@ func (bc *Blockchain) createBlockFromPending() error {
 	if err := bc.storage.ClearPendingPosts(); err != nil {
 		return fmt.Errorf("failed to clear pending posts: %w", err)
 	}
+
+	// Clear transfer pool
+	bc.TransferPool.ClearPool()
 
 	// Clear pending posts
 	bc.PendingPosts = []chain.Post{}
@@ -422,6 +478,8 @@ func (bc *Blockchain) GetBlockchainInfo() (map[string]interface{}, error) {
 		"latest_block_index":      latestBlock.Index,
 		"latest_block_hash":       latestBlock.Hash,
 		"latest_block_timestamp":  latestBlock.Timestamp,
+		"wallet_count":            bc.stateManager.GetWalletCount(),
+		"total_character_supply":  bc.stateManager.GetTotalCharacterSupply(),
 	}
 
 	return info, nil
@@ -437,6 +495,11 @@ func (bc *Blockchain) UpdateCharacterBalance(address string, amount int) error {
 	return bc.storage.UpdateCharacterBalance(address, amount)
 }
 
+// UpdateWalletState updates the wallet state in the state manager
+func (bc *Blockchain) UpdateWalletState(address string, balance int, nonce int64) {
+	bc.stateManager.UpdateWalletState(address, balance, nonce)
+}
+
 // Close closes the storage connection
 func (bc *Blockchain) Close() error {
 	return bc.storage.Close()
@@ -447,10 +510,9 @@ func (bc *Blockchain) GetPendingPosts() []chain.Post {
 	bc.mu.RLock()
 	defer bc.mu.RUnlock()
 
-	// Return a copy to avoid race conditions
-	pendingCopy := make([]chain.Post, len(bc.PendingPosts))
-	copy(pendingCopy, bc.PendingPosts)
-	return pendingCopy
+	posts := make([]chain.Post, len(bc.PendingPosts))
+	copy(posts, bc.PendingPosts)
+	return posts
 }
 
 // GetPendingPostByHash returns a specific pending post by hash
@@ -547,4 +609,159 @@ func (bc *Blockchain) GetMempoolInfo() map[string]interface{} {
 	info["posts"] = posts
 
 	return info
+}
+
+// CreateTransfer creates a new signed transfer transaction
+func (bc *Blockchain) CreateTransfer(to string, amount int, w *wallet.Wallet) (*chain.Transfer, error) {
+	// Get next nonce for the sender
+	nonce := bc.stateManager.GetNextNonce(w.GetAddress())
+
+	// Create transfer without signature first
+	transfer := &chain.Transfer{
+		From:      w.GetAddress(),
+		To:        to,
+		Amount:    amount,
+		GasFee:    1, // Fixed 1 character gas fee
+		Timestamp: time.Now().Unix(),
+		Nonce:     nonce,
+	}
+
+	// Calculate hash
+	hash, err := transfer.CalculateHash()
+	if err != nil {
+		return nil, fmt.Errorf("failed to calculate transfer hash: %w", err)
+	}
+	transfer.Hash = hash
+
+	// Sign the transfer using wallet's signing method
+	// Note: w.Sign() already hashes the data, so we pass the raw transfer data
+	transferData := fmt.Sprintf("%s:%s:%d:%d:%d:%d", transfer.From, transfer.To, transfer.Amount, transfer.GasFee, transfer.Timestamp, transfer.Nonce)
+	signatureBytes, err := w.Sign([]byte(transferData))
+	if err != nil {
+		return nil, fmt.Errorf("failed to sign transfer: %w", err)
+	}
+
+	transfer.Signature = hex.EncodeToString(signatureBytes)
+
+	return transfer, nil
+}
+
+// AddTransfer adds a transfer to the pool
+func (bc *Blockchain) AddTransfer(transfer chain.Transfer) error {
+	bc.mu.Lock()
+	defer bc.mu.Unlock()
+
+	// Validate transfer
+	if err := transfer.Validate(); err != nil {
+		return fmt.Errorf("invalid transfer: %w", err)
+	}
+
+	// Validate against current state
+	pendingTransfers := bc.TransferPool.GetTransfers()
+	if err := bc.stateManager.ValidateTransfer(transfer, pendingTransfers); err != nil {
+		return fmt.Errorf("transfer validation failed: %w", err)
+	}
+
+	// Add to transfer pool
+	if err := bc.TransferPool.AddTransfer(transfer); err != nil {
+		return fmt.Errorf("failed to add transfer to pool: %w", err)
+	}
+
+	return nil
+}
+
+// ProcessTransfers processes all transfers in the pool
+func (bc *Blockchain) ProcessTransfers() error {
+	bc.mu.Lock()
+	defer bc.mu.Unlock()
+
+	transfers := bc.TransferPool.GetTransfers()
+	if len(transfers) == 0 {
+		return nil // No transfers to process
+	}
+
+	// Process each transfer
+	for _, transfer := range transfers {
+		// Apply to state manager
+		if err := bc.stateManager.ApplyTransfer(transfer); err != nil {
+			return fmt.Errorf("failed to apply transfer %s: %w", transfer.Hash, err)
+		}
+
+		// Update storage
+		if err := bc.storage.UpdateCharacterBalance(transfer.From, -transfer.GetTotalCost()); err != nil {
+			return fmt.Errorf("failed to deduct from sender %s: %w", transfer.From, err)
+		}
+
+		if err := bc.storage.UpdateCharacterBalance(transfer.To, transfer.Amount); err != nil {
+			// Rollback sender deduction
+			bc.storage.UpdateCharacterBalance(transfer.From, transfer.GetTotalCost())
+			return fmt.Errorf("failed to add to recipient %s: %w", transfer.To, err)
+		}
+
+		// Remove from pool
+		if err := bc.TransferPool.RemoveTransfer(transfer.Hash); err != nil {
+			return fmt.Errorf("failed to remove transfer from pool: %w", err)
+		}
+	}
+
+	return nil
+}
+
+// GetNextNonce gets the next nonce for an address
+func (bc *Blockchain) GetNextNonce(address string) int64 {
+	return bc.stateManager.GetNextNonce(address)
+}
+
+// GetTransferPoolInfo returns information about the transfer pool
+func (bc *Blockchain) GetTransferPoolInfo() map[string]interface{} {
+	bc.mu.RLock()
+	defer bc.mu.RUnlock()
+
+	transfers := bc.TransferPool.GetTransfers()
+	info := map[string]interface{}{
+		"transfer_count":         len(transfers),
+		"total_character_volume": bc.TransferPool.GetTotalCharacterVolume(),
+		"transfers":              []map[string]interface{}{},
+	}
+
+	// Build transfer list
+	transferList := make([]map[string]interface{}, len(transfers))
+	for i, transfer := range transfers {
+		transferList[i] = map[string]interface{}{
+			"hash":      transfer.Hash,
+			"from":      transfer.From,
+			"to":        transfer.To,
+			"amount":    transfer.Amount,
+			"gas_fee":   transfer.GasFee,
+			"timestamp": transfer.Timestamp,
+			"nonce":     transfer.Nonce,
+		}
+	}
+	info["transfers"] = transferList
+
+	return info
+}
+
+// GetStateInfo returns information about the current state
+func (bc *Blockchain) GetStateInfo() map[string]interface{} {
+	bc.mu.RLock()
+	defer bc.mu.RUnlock()
+
+	wallets := bc.stateManager.GetAllWallets()
+	walletList := make([]map[string]interface{}, len(wallets))
+
+	for i, wallet := range wallets {
+		walletList[i] = map[string]interface{}{
+			"address":      wallet.Address,
+			"balance":      wallet.Balance,
+			"nonce":        wallet.Nonce,
+			"last_tx_time": wallet.LastTxTime,
+		}
+	}
+
+	return map[string]interface{}{
+		"wallet_count":           bc.stateManager.GetWalletCount(),
+		"total_character_supply": bc.stateManager.GetTotalCharacterSupply(),
+		"wallets":                walletList,
+	}
 }

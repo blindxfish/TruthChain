@@ -102,7 +102,7 @@ func TestBlockCreation(t *testing.T) {
 	}
 
 	// Create block
-	block := CreateBlock(1, "prev_hash", posts)
+	block := CreateBlock(1, "prev_hash", posts, []Transfer{}, nil)
 
 	// Test block properties
 	if block.Index != 1 {

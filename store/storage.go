@@ -15,6 +15,7 @@ type Storage interface {
 	// Block operations
 	SaveBlock(block *chain.Block) error
 	GetBlock(index int) (*chain.Block, error)
+	GetBlockByHash(hash string) (*chain.Block, error)
 	GetLatestBlock() (*chain.Block, error)
 	GetBlockCount() (int, error)
 	DeleteBlock(index int) error
@@ -146,6 +147,31 @@ func (s *BoltDBStorage) GetBlock(index int) (*chain.Block, error) {
 
 		if blockData == nil {
 			return fmt.Errorf("block not found: %d", index)
+		}
+
+		block = &chain.Block{}
+		if err := json.Unmarshal(blockData, block); err != nil {
+			return fmt.Errorf("failed to unmarshal block: %w", err)
+		}
+
+		return nil
+	})
+
+	return block, err
+}
+
+// GetBlockByHash retrieves a block by hash
+func (s *BoltDBStorage) GetBlockByHash(hash string) (*chain.Block, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	var block *chain.Block
+	err := s.db.View(func(tx *bbolt.Tx) error {
+		blocksBucket := tx.Bucket(blocksBucket)
+		blockData := blocksBucket.Get([]byte(hash))
+
+		if blockData == nil {
+			return fmt.Errorf("block not found: %s", hash)
 		}
 
 		block = &chain.Block{}

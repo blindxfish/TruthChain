@@ -273,6 +273,8 @@ func (bc *Blockchain) createBlockFromPending() error {
 		latestBlock.Index+1,
 		latestBlock.Hash,
 		bc.PendingPosts,
+		[]Transfer{}, // No transfers in this simple implementation
+		nil,          // No state root in this simple implementation
 	)
 
 	// Validate the new block

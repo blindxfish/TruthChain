@@ -6,6 +6,7 @@ import (
 	"log"
 	"os"
 	"os/exec"
+	"strings"
 	"time"
 
 	"github.com/blindxfish/truthchain/api"
@@ -35,16 +36,23 @@ func main() {
 		walletName = flag.String("name", "", "Wallet name for new wallets")
 
 		// Storage and blockchain commands
-		dbPath        = flag.String("db", "truthchain.db", "Path to database file")
-		postContent   = flag.String("post", "", "Post content to the blockchain")
-		showPosts     = flag.Bool("posts", false, "Show recent posts")
-		showBlocks    = flag.Bool("blocks", false, "Show recent blocks")
-		showStatus    = flag.Bool("status", false, "Show blockchain status")
-		showMempool   = flag.Bool("mempool", false, "Show mempool (pending posts)")
-		forceBlock    = flag.Bool("force-block", false, "Force creation of a new block")
-		postThreshold = flag.Int("post-threshold", chain.MainnetMinPosts, "Number of posts needed for block creation")
-		monitor       = flag.Bool("monitor", false, "Show live node/network stats (like top)")
-		apiPort       = flag.Int("api-port", 0, "Start HTTP API server on port (0 = disabled)")
+		dbPath           = flag.String("db", "truthchain.db", "Path to database file")
+		postContent      = flag.String("post", "", "Post content to the blockchain")
+		showPosts        = flag.Bool("posts", false, "Show recent posts")
+		showBlocks       = flag.Bool("blocks", false, "Show recent blocks")
+		showStatus       = flag.Bool("status", false, "Show blockchain status")
+		showMempool      = flag.Bool("mempool", false, "Show mempool (pending posts)")
+		forceBlock       = flag.Bool("force-block", false, "Force creation of a new block")
+		postThreshold    = flag.Int("post-threshold", chain.MainnetMinPosts, "Number of posts needed for block creation")
+		monitor          = flag.Bool("monitor", false, "Show live node/network stats (like top)")
+		apiPort          = flag.Int("api-port", 0, "Start HTTP API server on port (0 = disabled)")
+		sendTo           = flag.String("send", "", "Send characters to address")
+		sendAmount       = flag.Int("amount", 0, "Amount of characters to send")
+		showTransfers    = flag.Bool("show-transfers", false, "Show transfer pool information")
+		processTransfers = flag.Bool("process-transfers", false, "Process all pending transfers")
+		showState        = flag.Bool("show-state", false, "Show current blockchain state")
+		showWallets      = flag.Bool("show-wallets", false, "Show all wallet states")
+		addBalance       = flag.Int("add-balance", 0, "Add balance to current wallet (for testing)")
 	)
 	flag.Parse()
 
@@ -289,6 +297,139 @@ func main() {
 
 		fmt.Printf("✅ Block created successfully!\n")
 		fmt.Printf("New block index: %d\n", chainLength-1)
+		return
+	}
+
+	if *sendTo != "" && *sendAmount > 0 {
+		// Create and add transfer
+		transfer, err := blockchain.CreateTransfer(*sendTo, *sendAmount, w)
+		if err != nil {
+			log.Fatalf("Failed to create transfer: %v", err)
+		}
+
+		if err := blockchain.AddTransfer(*transfer); err != nil {
+			log.Fatalf("Failed to add transfer: %v", err)
+		}
+
+		fmt.Printf("✅ Transfer created successfully!\n")
+		fmt.Printf("From: %s\n", transfer.From)
+		fmt.Printf("To: %s\n", transfer.To)
+		fmt.Printf("Amount: %d characters\n", transfer.Amount)
+		fmt.Printf("Gas Fee: %d character\n", transfer.GasFee)
+		fmt.Printf("Total Cost: %d characters\n", transfer.GetTotalCost())
+		fmt.Printf("Hash: %s\n", transfer.Hash)
+		fmt.Printf("Nonce: %d\n", transfer.Nonce)
+		return
+	}
+
+	if *showTransfers {
+		// Show transfer pool information
+		transferInfo := blockchain.GetTransferPoolInfo()
+		fmt.Printf("TruthChain Transfer Pool:\n")
+		fmt.Printf("  Pending Transfers: %v\n", transferInfo["transfer_count"])
+		fmt.Printf("  Total Character Volume: %v\n", transferInfo["total_character_volume"])
+
+		transfers := transferInfo["transfers"].([]map[string]interface{})
+		if len(transfers) > 0 {
+			fmt.Printf("\nPending Transfers:\n")
+			for i, transfer := range transfers {
+				fmt.Printf("  ⏳ Transfer %d:\n", i+1)
+				fmt.Printf("    Hash: %s\n", transfer["hash"])
+				fmt.Printf("    From: %s\n", transfer["from"])
+				fmt.Printf("    To: %s\n", transfer["to"])
+				fmt.Printf("    Amount: %v\n", transfer["amount"])
+				fmt.Printf("    Gas Fee: %v\n", transfer["gas_fee"])
+				fmt.Printf("    Timestamp: %v\n", transfer["timestamp"])
+				fmt.Printf("    Nonce: %v\n\n", transfer["nonce"])
+			}
+		} else {
+			fmt.Printf("\nNo pending transfers in pool.\n")
+		}
+		return
+	}
+
+	if *processTransfers {
+		// Process pending transfers
+		if err := blockchain.ProcessTransfers(); err != nil {
+			log.Fatalf("Failed to process transfers: %v", err)
+		}
+
+		fmt.Printf("✅ Transfers processed successfully!\n")
+		return
+	}
+
+	if *showState {
+		stateInfo := blockchain.GetStateInfo()
+
+		fmt.Printf("TruthChain State:\n")
+		fmt.Printf("  Wallet Count: %v\n", stateInfo["wallet_count"])
+		fmt.Printf("  Total Character Supply: %v\n", stateInfo["total_character_supply"])
+
+		wallets := stateInfo["wallets"].([]map[string]interface{})
+		if len(wallets) > 0 {
+			fmt.Printf("\nWallets:\n")
+			for i, wallet := range wallets {
+				fmt.Printf("  %d. %s\n", i+1, wallet["address"])
+				fmt.Printf("     Balance: %v characters\n", wallet["balance"])
+				fmt.Printf("     Nonce: %v\n", wallet["nonce"])
+				fmt.Printf("     Last TX: %v\n", wallet["last_tx_time"])
+			}
+		}
+		return
+	}
+
+	if *showWallets {
+		stateInfo := blockchain.GetStateInfo()
+		wallets := stateInfo["wallets"].([]map[string]interface{})
+
+		if len(wallets) == 0 {
+			fmt.Printf("No wallets in state.\n")
+			return
+		}
+
+		fmt.Printf("Wallet States (%d total):\n", len(wallets))
+		fmt.Printf("%-50s %-15s %-10s %-20s\n", "Address", "Balance", "Nonce", "Last Transaction")
+		fmt.Printf("%s\n", strings.Repeat("-", 95))
+
+		for _, wallet := range wallets {
+			address := wallet["address"].(string)
+			balance := wallet["balance"].(int)
+			nonce := wallet["nonce"].(int64)
+			lastTx := wallet["last_tx_time"].(int64)
+
+			// Format last transaction time
+			lastTxStr := "Never"
+			if lastTx > 0 {
+				lastTxStr = time.Unix(lastTx, 0).Format("2006-01-02 15:04:05")
+			}
+
+			fmt.Printf("%-50s %-15d %-10d %-20s\n", address, balance, nonce, lastTxStr)
+		}
+		return
+	}
+
+	if *addBalance > 0 {
+		// Get current balance from storage
+		currentBalance, err := blockchain.GetCharacterBalance(w.GetAddress())
+		if err != nil {
+			// If wallet doesn't exist in storage, start with 0
+			currentBalance = 0
+		}
+
+		// Add balance to current wallet
+		if err := blockchain.UpdateCharacterBalance(w.GetAddress(), *addBalance); err != nil {
+			log.Fatalf("Failed to add balance: %v", err)
+		}
+
+		// Calculate total balance
+		totalBalance := currentBalance + *addBalance
+
+		// Update state manager with total balance
+		blockchain.UpdateWalletState(w.GetAddress(), totalBalance, 0)
+
+		fmt.Printf("✅ Added %d characters to wallet %s\n", *addBalance, w.GetAddress())
+		fmt.Printf("Previous balance: %d characters\n", currentBalance)
+		fmt.Printf("New total balance: %d characters\n", totalBalance)
 		return
 	}
 
