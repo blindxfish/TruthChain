@@ -14,7 +14,6 @@ deploy/
 truthchain.db
 
 # Personal configuration
-bootstrap.json
 wallet.json
 *.key
 
