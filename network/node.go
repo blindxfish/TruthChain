@@ -29,6 +29,7 @@ type TrustNetwork struct {
 	PeerTable        *PeerTable        // Mesh management
 	MeshManager      *MeshManager      // Mesh connection management
 	BootstrapManager *BootstrapManager // Bootstrap node management
+	MeshSyncManager  *MeshSyncManager  // Chain sync manager
 
 	// Configuration
 	ListenPort    int
@@ -114,6 +115,7 @@ func NewTrustNetwork(
 		PeerTable:        NewPeerTable(32), // Default max 32 mesh peers
 		MeshManager:      nil,              // Will be initialized after network is created
 		BootstrapManager: NewBootstrapManager(bootstrapConfig),
+		MeshSyncManager:  nil, // Will be initialized after network is created
 
 		ListenPort:    listenPort,
 		MaxPeers:      10,  // Default max 10 direct peers
@@ -134,6 +136,9 @@ func NewTrustNetwork(
 	// Set up message router
 	network.MessageRouter.Network = network
 
+	// Initialize MeshSyncManager
+	network.MeshSyncManager = NewMeshSyncManager(network, blockchain)
+
 	return network
 }
 
@@ -152,6 +157,13 @@ func (tn *TrustNetwork) Start() error {
 	tn.MeshManager = NewMeshManager(tn)
 	if err := tn.MeshManager.Start(); err != nil {
 		return fmt.Errorf("failed to start mesh manager: %v", err)
+	}
+
+	// Start MeshSyncManager
+	if tn.MeshSyncManager != nil {
+		if err := tn.MeshSyncManager.Start(); err != nil {
+			return fmt.Errorf("failed to start mesh sync manager: %v", err)
+		}
 	}
 
 	// Start background goroutines
@@ -189,6 +201,11 @@ func (tn *TrustNetwork) Stop() error {
 	// Stop mesh manager
 	if tn.MeshManager != nil {
 		tn.MeshManager.Stop()
+	}
+
+	// Stop MeshSyncManager
+	if tn.MeshSyncManager != nil {
+		tn.MeshSyncManager.Stop()
 	}
 
 	close(tn.StopChan)
