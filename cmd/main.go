@@ -10,7 +10,6 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
-	"path/filepath"
 	"runtime"
 	"strconv"
 	"strings"
@@ -170,32 +169,33 @@ func main() {
 	}
 
 	// Configure Windows Firewall if on Windows
-	if (os.Getenv("OS") == "Windows_NT" && config.ConfigureFirewall) || (isLinux() && config.ConfigureFirewall) {
-		exePath := ""
-		if os.Getenv("OS") == "Windows_NT" {
-			// Get the executable path for Windows
-			var err error
-			exePath, err = os.Executable()
-			if err != nil {
-				log.Printf("Warning: Could not get executable path for firewall configuration: %v", err)
-			}
-			exePath, err = filepath.Abs(exePath)
-			if err != nil {
-				log.Printf("Warning: Could not get absolute path for firewall configuration: %v", err)
-			}
-		}
-		if os.Getenv("OS") == "Windows_NT" {
-			if err := ConfigureFirewall(config.APIPort, config.MeshPort, exePath); err != nil {
-				log.Printf("Warning: Failed to configure firewall rules: %v", err)
-				log.Printf("You may need to manually allow TruthChain through Windows Firewall")
-			}
-		} else if isLinux() {
-			if err := ConfigureLinuxFirewall(config.APIPort, config.MeshPort); err != nil {
-				log.Printf("Warning: Failed to configure Linux firewall rules: %v", err)
-				log.Printf("You may need to manually allow TruthChain through your Linux firewall")
-			}
-		}
-	}
+	// (Firewall configuration is now manual. See deployment docs for UFW instructions.)
+	// if (os.Getenv("OS") == "Windows_NT" && config.ConfigureFirewall) || (isLinux() && config.ConfigureFirewall) {
+	// 	exePath := ""
+	// 	if os.Getenv("OS") == "Windows_NT" {
+	// 		// Get the executable path for Windows
+	// 		var err error
+	// 		exePath, err = os.Executable()
+	// 		if err != nil {
+	// 			log.Printf("Warning: Could not get executable path for firewall configuration: %v", err)
+	// 		}
+	// 		exePath, err = filepath.Abs(exePath)
+	// 		if err != nil {
+	// 			log.Printf("Warning: Could not get absolute path for firewall configuration: %v", err)
+	// 		}
+	// 	}
+	// 	if os.Getenv("OS") == "Windows_NT" {
+	// 		if err := ConfigureFirewall(config.APIPort, config.MeshPort, exePath); err != nil {
+	// 			log.Printf("Warning: Failed to configure firewall rules: %v", err)
+	// 			log.Printf("You may need to manually allow TruthChain through Windows Firewall")
+	// 		}
+	// 	} else if isLinux() {
+	// 		if err := ConfigureLinuxFirewall(config.APIPort, config.MeshPort); err != nil {
+	// 			log.Printf("Warning: Failed to configure Linux firewall rules: %v", err)
+	// 			log.Printf("You may need to manually allow TruthChain through your Linux firewall")
+	// 		}
+	// 	}
+	// }
 
 	// Start the node
 	if err := node.Start(); err != nil {
@@ -213,17 +213,18 @@ func main() {
 	}
 
 	// Clean up firewall rules on Windows
-	if (os.Getenv("OS") == "Windows_NT" && config.ConfigureFirewall) || (isLinux() && config.ConfigureFirewall) {
-		if os.Getenv("OS") == "Windows_NT" {
-			if err := RemoveFirewallRules(); err != nil {
-				log.Printf("Warning: Failed to remove firewall rules: %v", err)
-			}
-		} else if isLinux() {
-			if err := RemoveLinuxFirewallRules(config.APIPort, config.MeshPort); err != nil {
-				log.Printf("Warning: Failed to remove Linux firewall rules: %v", err)
-			}
-		}
-	}
+	// (Firewall cleanup is now manual. See deployment docs for UFW instructions.)
+	// if (os.Getenv("OS") == "Windows_NT" && config.ConfigureFirewall) || (isLinux() && config.ConfigureFirewall) {
+	// 	if os.Getenv("OS") == "Windows_NT" {
+	// 		if err := RemoveFirewallRules(); err != nil {
+	// 			log.Printf("Warning: Failed to remove firewall rules: %v", err)
+	// 		}
+	// 	} else if isLinux() {
+	// 		if err := RemoveLinuxFirewallRules(config.APIPort, config.MeshPort); err != nil {
+	// 			log.Printf("Warning: Failed to remove Linux firewall rules: %v", err)
+	// 		}
+	// 	}
+	// }
 }
 
 // runInteractiveSetup guides the user through configuration
@@ -484,7 +485,7 @@ func configureFirewall(reader *bufio.Reader) bool {
 	if os.Getenv("OS") == "Windows_NT" {
 		return getYesNo(reader, "Automatically configure Windows Firewall rules?", true)
 	} else {
-		fmt.Println("ℹ️  Firewall configuration is only available on Windows")
+		fmt.Println("ℹ️  Firewall configuration is manual. Please use UFW or your preferred firewall tool.")
 		return false
 	}
 }
@@ -806,7 +807,6 @@ func (n *TruthChainNode) setupAPIRoutes() {
 	// Network endpoints
 	n.router.HandleFunc("/network/stats", n.handleNetworkStats).Methods("GET")
 	n.router.HandleFunc("/network/peers", n.handleGetPeers).Methods("GET")
-	n.router.HandleFunc("/network/firewall", n.handleFirewallStatus).Methods("GET")
 
 	// Add CORS headers
 	n.router.Use(n.corsMiddleware)
@@ -1150,24 +1150,6 @@ func (n *TruthChainNode) handleGetPeers(w http.ResponseWriter, r *http.Request) 
 		}
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(response)
-}
-
-func (n *TruthChainNode) handleFirewallStatus(w http.ResponseWriter, r *http.Request) {
-	var response map[string]interface{}
-	if os.Getenv("OS") == "Windows_NT" {
-		status := CheckFirewallStatus(n.config.APIPort, n.config.MeshPort)
-		response = status
-	} else if isLinux() {
-		status := CheckLinuxFirewallStatus(n.config.APIPort, n.config.MeshPort)
-		response = status
-	} else {
-		response = map[string]interface{}{
-			"status": "not_supported",
-			"note":   "Firewall configuration is only available on Windows and Linux",
-		}
-	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(response)
 }

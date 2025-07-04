@@ -6,6 +6,7 @@
 *.dylib
 truthchain
 truthchain.exe
+deploy/
 
 # Database files
 *.db
