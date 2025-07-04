@@ -38,4 +38,12 @@ Thumbs.db
 
 # Temporary files
 *.tmp
-*.temp 
+*.temp
+
+# Ignore sensitive and unnecessary files
+*.bak
+*.tar.gz
+wallet.json
+truthchain-config.json
+/data/
+/backups/ 
