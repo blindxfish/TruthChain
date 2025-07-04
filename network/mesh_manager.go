@@ -1,6 +1,7 @@
 package network
 
 import (
+	"bufio"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -163,12 +164,6 @@ func (mm *MeshManager) establishConnection(address string) {
 	}
 	mm.mu.RUnlock()
 
-	// Check if trying to connect to self (prevent self-connections)
-	if mm.isSelfConnection(address) {
-		log.Printf("Skipping self-connection to %s", address)
-		return
-	}
-
 	// Establish TCP connection
 	conn, err := net.DialTimeout("tcp", address, mm.connectionTimeout)
 	if err != nil {
@@ -180,6 +175,31 @@ func (mm *MeshManager) establishConnection(address string) {
 		}
 		return
 	}
+
+	// --- Wallet handshake ---
+	// Send our wallet address
+	ourWallet := mm.network.Wallet.GetAddress()
+	_, err = conn.Write([]byte(ourWallet + "\n"))
+	if err != nil {
+		log.Printf("Failed to send handshake to %s: %v", address, err)
+		conn.Close()
+		return
+	}
+	// Read remote wallet address
+	remoteReader := bufio.NewReader(conn)
+	remoteWallet, err := remoteReader.ReadString('\n')
+	if err != nil {
+		log.Printf("Failed to read handshake from %s: %v", address, err)
+		conn.Close()
+		return
+	}
+	remoteWallet = strings.TrimSpace(remoteWallet)
+	if remoteWallet == ourWallet {
+		// Self-connection, close quietly
+		conn.Close()
+		return
+	}
+	// --- End handshake ---
 
 	// Create mesh connection
 	meshConn := &MeshConnection{
@@ -437,86 +457,30 @@ func (mm *MeshManager) SendToMesh(message []byte) error {
 	return lastError
 }
 
-// isSelfConnection checks if the given address is a self-connection
-func (mm *MeshManager) isSelfConnection(address string) bool {
-	// Get our own listening address
-	ourAddress := fmt.Sprintf("127.0.0.1:%d", mm.network.ListenPort)
-
-	// Check if the target address matches our own
-	if address == ourAddress {
-		return true
-	}
-
-	// Also check for localhost variations
-	if strings.HasPrefix(address, "127.0.0.1:") || strings.HasPrefix(address, "localhost:") {
-		return true
-	}
-
-	// Check if it's our own domain (if we're running a beacon node)
-	if mm.network.NodeID != "" && strings.Contains(address, mm.network.NodeID) {
-		return true
-	}
-
-	// Check for mainnet domain (since you're running the mainnet node)
-	if strings.Contains(address, "mainnet.truth-chain.org") {
-		return true
-	}
-
-	// Check if it's our own domain by resolving the address
-	// Extract hostname from address (remove port)
-	hostPort := strings.Split(address, ":")
-	if len(hostPort) == 2 {
-		hostname := hostPort[0]
-		port := hostPort[1]
-
-		// If the port matches our listening port, it might be us
-		if port == fmt.Sprintf("%d", mm.network.ListenPort) {
-			// Check if this hostname resolves to our local IP
-			ips, err := net.LookupHost(hostname)
-			if err == nil {
-				for _, ip := range ips {
-					if ip == "127.0.0.1" || ip == "::1" || strings.HasPrefix(ip, "192.168.") || strings.HasPrefix(ip, "10.") {
-						return true
-					}
-				}
-			}
-		}
-	}
-
-	return false
-}
-
-// GetMeshStats returns statistics about mesh connections
-func (mm *MeshManager) GetMeshStats() map[string]interface{} {
-	mm.mu.RLock()
-	defer mm.mu.RUnlock()
-
-	connectedCount := 0
-	totalLatency := time.Duration(0)
-
-	for _, conn := range mm.connections {
-		if conn.IsConnected {
-			connectedCount++
-			totalLatency += conn.Latency
-		}
-	}
-
-	avgLatency := time.Duration(0)
-	if connectedCount > 0 {
-		avgLatency = totalLatency / time.Duration(connectedCount)
-	}
-
-	return map[string]interface{}{
-		"target_connections":   mm.targetCount,
-		"connected_peers":      connectedCount,
-		"average_latency_ms":   avgLatency.Milliseconds(),
-		"selection_interval_s": mm.selectionInterval.Seconds(),
-		"ping_interval_s":      mm.pingInterval.Seconds(),
-	}
-}
-
 // AcceptInboundConnection accepts an inbound connection and adds to mesh
 func (mm *MeshManager) AcceptInboundConnection(conn net.Conn, remoteAddr string) {
+	// --- Wallet handshake ---
+	ourWallet := mm.network.Wallet.GetAddress()
+	remoteReader := bufio.NewReader(conn)
+	remoteWallet, err := remoteReader.ReadString('\n')
+	if err != nil {
+		conn.Close()
+		return
+	}
+	remoteWallet = strings.TrimSpace(remoteWallet)
+	// Send our wallet address in response
+	_, err = conn.Write([]byte(ourWallet + "\n"))
+	if err != nil {
+		conn.Close()
+		return
+	}
+	if remoteWallet == ourWallet {
+		// Self-connection, close quietly
+		conn.Close()
+		return
+	}
+	// --- End handshake ---
+
 	log.Printf("Accepting inbound connection from: %s", remoteAddr)
 
 	// Create mesh connection

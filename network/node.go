@@ -168,6 +168,10 @@ func (tn *TrustNetwork) Start() error {
 	}
 
 	log.Printf("TrustNetwork started on port %d", tn.ListenPort)
+
+	// Start periodic status logger
+	go tn.periodicStatusLogger()
+
 	return nil
 }
 
@@ -326,12 +330,6 @@ func (tn *TrustNetwork) GetNetworkStats() map[string]interface{} {
 		peers = append(peers, peerInfo)
 	}
 
-	// Add mesh statistics
-	meshStats := make(map[string]interface{})
-	if tn.MeshManager != nil {
-		meshStats = tn.MeshManager.GetMeshStats()
-	}
-
 	// Combine all stats
 	stats := map[string]interface{}{
 		"node_id":         tn.NodeID,
@@ -340,7 +338,6 @@ func (tn *TrustNetwork) GetNetworkStats() map[string]interface{} {
 		"max_peers":       tn.MaxPeers,
 		"min_trust_score": tn.MinTrustScore,
 		"peers":           peers,
-		"mesh":            meshStats,
 	}
 
 	// Merge topology and trust stats
@@ -692,4 +689,61 @@ func (tn *TrustNetwork) gossipToPeers(msg *NetworkMessage, excludePeer string) {
 
 	// Use mesh manager to send to selected peers
 	_ = tn.MeshManager.SendNetworkMessage(msg)
+}
+
+// Add periodicStatusLogger method
+func (tn *TrustNetwork) periodicStatusLogger() {
+	ticker := time.NewTicker(60 * time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ticker.C:
+			// Gather blockchain info
+			if tn.Blockchain == nil {
+				continue
+			}
+			info, err := tn.Blockchain.GetBlockchainInfo()
+			if err != nil {
+				log.Printf("[Status] Failed to get blockchain info: %v", err)
+				continue
+			}
+			// Gather network stats
+			netStats := tn.GetNetworkStats()
+			peerCount := 0
+			if peers, ok := netStats["peers"].([]map[string]interface{}); ok {
+				peerCount = len(peers)
+			}
+			// Prepare peer summary
+			nearest := "-"
+			trusted := "-"
+			furthest := "-"
+			if peers, ok := netStats["peers"].([]map[string]interface{}); ok && len(peers) > 0 {
+				// Sort by hop_distance, trust_score
+				minHop, maxHop := 9999, -1
+				maxTrust := -1.0
+				for _, p := range peers {
+					hop, _ := p["hop_distance"].(int)
+					trust, _ := p["trust_score"].(float64)
+					addr, _ := p["address"].(string)
+					if hop < minHop {
+						minHop = hop
+						nearest = addr
+					}
+					if hop > maxHop {
+						maxHop = hop
+						furthest = addr
+					}
+					if trust > maxTrust {
+						maxTrust = trust
+						trusted = addr
+					}
+				}
+			}
+			log.Printf("[Status] Chain: %d blocks, %d posts, %d chars | Peers: %d [nearest: %s, trusted: %s, furthest: %s] | Minted: %d | Pending posts: %d",
+				info["chain_length"], info["total_post_count"], info["total_character_count"],
+				peerCount, nearest, trusted, furthest, info["total_character_supply"], info["pending_post_count"])
+		case <-tn.StopChan:
+			return
+		}
+	}
 }
