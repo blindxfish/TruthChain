@@ -13,7 +13,7 @@ BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
 # Configuration
-TRUTHCHAIN_VERSION="v0.2.0"
+TRUTHCHAIN_VERSION="v0.2.1"
 TRUTHCHAIN_USER="truthchain"
 TRUTHCHAIN_HOME="/opt/truthchain"
 TRUTHCHAIN_SERVICE="truthchain"

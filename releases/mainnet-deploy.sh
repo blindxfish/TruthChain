@@ -13,7 +13,7 @@ BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
 # Configuration
-TRUTHCHAIN_VERSION="v0.2.0"
+TRUTHCHAIN_VERSION="v0.2.1"
 TRUTHCHAIN_USER="truthchain"
 TRUTHCHAIN_HOME="/opt/truthchain"
 TRUTHCHAIN_SERVICE="truthchain"
@@ -23,7 +23,7 @@ TRUTHCHAIN_REPO="https://github.com/blindxfish/truthchain.git"
 # Network configuration for mainnet
 MAINNET_API_PORT=8080
 MAINNET_MESH_PORT=9876
-MAINNET_DOMAIN="168.231.108.135"
+MAINNET_DOMAIN="mainnet.truth-chain.org"
 
 echo -e "${BLUE}=== TruthChain Mainnet Deployment ===${NC}"
 echo -e "${YELLOW}Target VPS: ${MAINNET_DOMAIN}${NC}"
@@ -125,7 +125,11 @@ cat > $TRUTHCHAIN_HOME/bin/bootstrap.json << EOF
   "nodes": [
     {
       "address": "$MAINNET_DOMAIN:$MAINNET_MESH_PORT",
-      "description": "TruthChain Mainnet Node"
+      "description": "TruthChain Mainnet Node",
+      "region": "Global",
+      "is_beacon": true,
+      "trust_score": 0.9,
+      "last_seen": 0
     }
   ]
 }
