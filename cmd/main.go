@@ -145,6 +145,18 @@ func saveConfig(config *NodeConfig) error {
 }
 
 func main() {
+	// Initialize logging to file in logs/truthchain.log
+	if _, err := os.Stat("logs"); os.IsNotExist(err) {
+		_ = os.Mkdir("logs", 0755)
+	}
+	logFile, err := os.OpenFile("logs/truthchain.log", os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0666)
+	if err == nil {
+		log.SetOutput(logFile)
+		log.Println("==== TruthChain node started ====")
+	} else {
+		log.Printf("Failed to log to file, using default stderr: %v", err)
+	}
+
 	// Check if user wants to skip interactive setup
 	if len(os.Args) > 1 && (os.Args[1] == "--help" || os.Args[1] == "-h") {
 		printHelp()
@@ -895,6 +907,17 @@ func (n *TruthChainNode) startNetworkComponents() error {
 			return fmt.Errorf("failed to start trust network: %w", err)
 		}
 		log.Printf("🌐 Trust network started")
+	}
+
+	// Start sync server on mesh port if mesh mode is enabled
+	if n.config.MeshMode {
+		syncAddr := fmt.Sprintf(":%d", n.config.MeshPort)
+		go func() {
+			if err := network.StartSyncServer(syncAddr, n.blockchain, n.wallet.GetAddress()); err != nil {
+				log.Printf("❌ Failed to start sync server: %v", err)
+			}
+		}()
+		log.Printf("🔄 Sync server started on port %d", n.config.MeshPort)
 	}
 
 	// Start miner if enabled
