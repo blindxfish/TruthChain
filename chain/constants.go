@@ -87,7 +87,7 @@ const (
 
 // Genesis Authority - Only this key can create the genesis block
 const (
-	GenesisAuthorityAddress = "YOUR_WALLET_ADDRESS_HERE" // Replace with your actual address
+	GenesisAuthorityAddress = "1HVfSHedQV5j489HoYFoaMweQpEZVX2qAB" // Your actual wallet address
 	GenesisAuthorityFile    = "genesis-authority.json"
 )
 
