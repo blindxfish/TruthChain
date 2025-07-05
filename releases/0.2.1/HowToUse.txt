@@ -1,0 +1,418 @@
+# TruthChain: How to Use Guide
+## A Beginner's Guide to the Decentralized Truth Network
+
+---
+
+## 🌟 What is TruthChain?
+
+**TruthChain is like a permanent, unchangeable Twitter that runs on your computer.**
+
+Imagine if every tweet, post, or statement made by politicians, companies, or anyone else could never be deleted or changed. That's what TruthChain does - it creates a permanent record of what people say, when they said it, and who said it.
+
+### Why This Matters
+- **No More Deleted Tweets**: Politicians can't delete embarrassing posts
+- **No More Fake News**: Once something is posted, it stays forever
+- **Historical Record**: Future generations can see what was actually said
+- **Censorship Resistant**: No government or company can remove posts
+
+---
+
+## 💰 How It Works (The Simple Version)
+
+### Characters as Money
+- Instead of dollars or Bitcoin, TruthChain uses "characters"
+- **1 character = 1 letter/space/punctuation mark** in your posts
+- To post "Hello World!" (12 characters), you need 12 characters in your wallet
+
+### How to Get Characters
+- **Run a TruthChain node** (your computer) to earn characters automatically
+- **Receive characters** from other users
+- **Early adopters earn more** - the sooner you start, the more you earn
+
+### Example
+- Post: "I love TruthChain!" = 18 characters needed
+- If you have 100 characters in your wallet, you can post this
+- After posting, you'll have 82 characters left
+
+---
+
+## 🚀 Getting Started (Step by Step)
+
+### Step 1: Download and Install
+
+1. **Download TruthChain** from the official repository
+2. **Extract the files** to a folder on your computer
+3. **Open Command Prompt/Terminal** in that folder
+
+### Step 2: Bitcoin-Style Setup (v0.2.0 - Enhanced Security!)
+
+TruthChain v0.2.0 features **Bitcoin-style security** with strict genesis validation and enforced consensus:
+
+```bash
+# Simply run TruthChain.exe
+./TruthChain.exe
+```
+
+**First Time Setup (New Node):**
+
+1. **Wallet Configuration**
+   - Choose to create a new wallet or import an existing one
+   - If importing, paste your private key
+   - Wallet is automatically saved to `wallet.json`
+   - A comprehensive `YourWalletInfo.txt` file is created with security instructions
+
+2. **Network Selection**
+   - **Mainnet**: Production network (recommended for most users)
+   - **Testnet**: Development network (for testing)
+   - **Local**: Isolated network (for development)
+
+3. **Node Modes**
+   - **API Server**: Enable HTTP API for web interfaces
+   - **Mesh Network**: Connect to other nodes
+   - **Beacon Mode**: Announce your node publicly (+50% rewards)
+   - **Uptime Mining**: Earn characters by keeping node online
+
+4. **Port Configuration**
+   - API Port (default: 8080)
+   - Mesh Port (default: 9876) - handles both mesh and chain sync
+
+5. **Domain Setup** (if beacon mode)
+   - Enter your domain (e.g., mynode.truth-chain.org)
+
+6. **Database Configuration**
+   - Choose database file location (default: truthchain.db)
+
+7. **Initial Sync (NEW!)**
+   - **No local genesis creation** - node will sync from trusted peers
+   - **Bitcoin-style validation** - validates canonical genesis block
+   - **Peer discovery** - automatically finds and connects to other nodes
+   - **Timeout protection** - 2-minute timeout for peer discovery
+
+8. **Final Confirmation**
+   - Review your configuration
+   - Configuration automatically saved to `truthchain-config.json`
+   - Start the node with enhanced security
+
+**Subsequent Runs:**
+- App detects existing data automatically
+- Loads saved configuration from `truthchain-config.json`
+- **Genesis validation** - validates existing blockchain on startup
+- Skips setup entirely - just works like Bitcoin Core!
+- No crashes, no repeated configuration
+
+**🛡️ Security Features (v0.2.0):**
+- **Canonical Genesis**: All nodes must have the same genesis block
+- **No Local Forks**: New nodes cannot create local genesis blocks
+- **Header-First Sync**: Faster, safer synchronization
+- **Burn-Weight Consensus**: Prefers chains with higher character burn
+- **Automatic Reorgs**: Switches to better chains automatically
+
+### Step 3: Your Wallet Information
+
+After setup, you'll have:
+
+- **`wallet.json`**: Your wallet file (keep secure)
+- **`truthchain-config.json`**: Your saved configuration (created automatically)
+- **`YourWalletInfo.txt`**: Comprehensive wallet information including:
+  - Your wallet address (safe to share)
+  - Your private key (NEVER share this!)
+  - Security best practices
+  - How to import on other devices
+  - API usage examples
+
+**⚠️ IMPORTANT**: Keep `YourWalletInfo.txt` in a secure location. It contains your private key!
+
+**🔄 Bitcoin-Style Restart**: On subsequent runs, the app will automatically detect your existing data and load your saved configuration - no setup required!
+
+---
+
+## 📝 Making Your First Post
+
+### Step 4: Create a Post via API
+
+Once your node is running, you can create posts using the API:
+
+```bash
+# Check your balance first
+curl http://localhost:8080/wallets/YOUR_ADDRESS/balance
+
+# Create a post (replace YOUR_ADDRESS with your actual address)
+curl -X POST -H "Content-Type: application/json" \
+  -d '{"content":"Hello, TruthChain! This is my first post."}' \
+  http://localhost:8080/posts
+```
+
+**What happens:**
+- Your message is signed with your wallet
+- It's added to the blockchain (permanent record)
+- Characters are deducted from your wallet
+- "Hello, TruthChain! This is my first post." = 47 characters used
+
+### Step 5: Check Your Posts
+
+```bash
+# Check pending posts
+curl http://localhost:8080/posts/pending
+
+# Check latest block
+curl http://localhost:8080/blockchain/latest
+```
+
+---
+
+## 🔄 Sending Characters to Others
+
+### Step 6: Send Characters
+
+```bash
+# Send 100 characters to another address
+curl -X POST -H "Content-Type: application/json" \
+  -d '{"to":"RECIPIENT_ADDRESS","amount":100}' \
+  http://localhost:8080/transfers
+```
+
+**What happens:**
+- 100 characters are sent to the recipient
+- 1 character is used as a "gas fee" (like a transaction fee)
+- Total cost: 101 characters
+- The transfer is signed and secure
+
+### Step 7: Check Transfers
+
+```bash
+# Check pending transfers
+curl http://localhost:8080/transfers/pending
+```
+
+---
+
+## 🌐 Network Participation
+
+### Step 8: Understanding Network Modes
+
+**API Mode** (Port 8080)
+- Provides HTTP API for web interfaces
+- Required for creating posts and checking balances
+- Only accessible from localhost by default
+
+**Mesh Mode** (Port 9876)
+- Connects to other TruthChain nodes
+- Syncs blocks and posts across the network
+- Handles both mesh communication and chain synchronization
+- Only one port needed for all network communication
+- **Self-connection detection** prevents duplicate peer counting
+
+**Beacon Mode**
+- Announces your node to the network
+- Requires a public domain pointing to your IP
+- Earns +50% character rewards
+- Helps other nodes discover the network
+
+**Mining Mode**
+- Earns characters based on uptime
+- Requires 80% uptime over 24 hours
+- Rewards distributed every 10 minutes
+- Heartbeats logged every hour
+
+### Step 9: Network Configuration
+
+**For Mainnet (Production):**
+- Use default settings from interactive setup
+- Fixed consensus rules ensure compatibility
+- Post threshold: 5 posts per block
+
+**For Testnet (Development):**
+- Relaxed settings for testing
+- Post threshold: 3 posts per block
+
+**For Local (Development):**
+- Minimal settings for local testing
+- Post threshold: 2 posts per block
+
+---
+
+## 💡 Advanced Features
+
+### Bitcoin-Style Restart System
+
+**Automatic Configuration Loading:**
+- Configuration saved to `truthchain-config.json` after first setup
+- App automatically detects existing data on restart
+- No repeated setup required - works like Bitcoin Core
+- Seamless experience between restarts
+
+### Self-Connection Detection
+
+**Smart Peer Management:**
+- App automatically detects when connecting to itself
+- Prevents duplicate peer counting in network stats
+- Eliminates self-pinging and connection loops
+- Works with both IP addresses and domain names
+
+### Wallet Management
+
+**Import Existing Wallet:**
+1. Copy your private key from `YourWalletInfo.txt`
+2. Run `./TruthChain.exe`
+3. Choose "Import existing wallet"
+4. Paste your private key
+
+**Backup Your Wallet:**
+```bash
+# Download wallet backup via API
+curl http://localhost:8080/wallets/YOUR_ADDRESS/backup -o wallet_backup.json
+```
+
+**Check Wallet Info:**
+```bash
+# Get wallet information
+curl http://localhost:8080/wallets/YOUR_ADDRESS
+```
+
+### Network Monitoring
+
+**Check Node Status:**
+```bash
+curl http://localhost:8080/status
+```
+
+**Check Network Stats:**
+```bash
+curl http://localhost:8080/network/stats
+```
+
+**Check Uptime Info:**
+```bash
+curl http://localhost:8080/uptime
+```
+
+### Block and Chain Information
+
+**Latest Block:**
+```bash
+curl http://localhost:8080/blockchain/latest
+```
+
+**Chain Length:**
+```bash
+curl http://localhost:8080/blockchain/length
+```
+
+---
+
+## 🔐 Security Best Practices
+
+### Wallet Security
+1. **Backup your wallet**: Save `YourWalletInfo.txt` in multiple secure locations
+2. **Protect your private key**: Never share it with anyone
+3. **Use secure environments**: Clean computers with updated software
+4. **Regular backups**: Test your backup by importing on a test system
+
+### Network Security
+1. **Firewall configuration**: Only open necessary ports (8080 for API, 9876 for mesh)
+2. **Domain security**: Use secure domains for beacon mode
+3. **Regular updates**: Keep your node software updated
+
+### File Permissions
+- `wallet.json`: 600 (owner read/write only)
+- `YourWalletInfo.txt`: 600 (owner read/write only)
+- `truthchain.db`: 600 (owner read/write only)
+- `truthchain-config.json`: 600 (owner read/write only)
+- `truthchain-config.json`: 600 (owner read/write only)
+
+---
+
+## 🚨 Troubleshooting
+
+### Common Issues
+
+**"Uptime too low for rewards"**
+- This is normal when you first start
+- Need 80% uptime over 24 hours to receive rewards
+- Keep your node running continuously
+
+**"Wallet not found"**
+- Make sure `wallet.json` exists in your directory
+- Check file permissions
+- Try importing your wallet again
+
+**"Port already in use"**
+- Change the port in the interactive setup
+- Or stop other services using the same port
+
+**"Genesis block mismatch" (v0.2.0)**
+- This indicates your node has an invalid genesis block
+- **Do NOT delete your database** - this is a security feature
+- Your node will automatically sync from trusted peers
+- If sync fails, check network connectivity and peer availability
+- The canonical genesis hash is: `38025032e3f12e8270d7fdb2bf2dad92b9b3d5a53967f40eeebe4e7f52c1a934`
+
+**"App crashes on restart"**
+- This is now fixed! TruthChain uses Bitcoin-style restart
+- App automatically detects existing data and loads saved configuration
+- No more crashes when restarting with existing database
+
+### Getting Help
+
+1. **Check the logs**: Look for error messages in the terminal
+2. **Verify configuration**: Make sure ports and settings are correct
+3. **Check file permissions**: Ensure wallet and database files are secure
+4. **Restart the node**: Sometimes a simple restart fixes issues
+
+---
+
+## 📚 API Reference
+
+### Essential Endpoints
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| `GET` | `/status` | Node and blockchain status (includes sync state) |
+| `GET` | `/health` | Health check |
+| `GET` | `/wallets/{address}` | Wallet information |
+| `GET` | `/wallets/{address}/balance` | Wallet balance |
+| `POST` | `/posts` | Create a post |
+| `POST` | `/transfers` | Send characters |
+| `GET` | `/blockchain/latest` | Latest block |
+| `GET` | `/network/stats` | Network statistics |
+
+### Example Usage
+
+**Start your node:**
+```bash
+./TruthChain.exe
+```
+
+**Check status:**
+```bash
+curl http://localhost:8080/status
+```
+
+**Create a post:**
+```bash
+curl -X POST -H "Content-Type: application/json" \
+  -d '{"content":"Hello TruthChain!"}' \
+  http://localhost:8080/posts
+```
+
+**Send characters:**
+```bash
+curl -X POST -H "Content-Type: application/json" \
+  -d '{"to":"RECIPIENT_ADDRESS","amount":100}' \
+  http://localhost:8080/transfers
+```
+
+---
+
+## 🎯 Next Steps
+
+1. **Run your node**: Keep it online to earn characters
+2. **Restart seamlessly**: Enjoy Bitcoin-style restart with no crashes
+3. **Create posts**: Share your thoughts on TruthChain
+4. **Connect to network**: Enable mesh mode to sync with others
+5. **Become a beacon**: Set up a public node for +50% rewards
+6. **Build applications**: Use the API to create web interfaces
+
+---
+
+**Welcome to TruthChain - where truth is permanent!** 🌟✨ 
