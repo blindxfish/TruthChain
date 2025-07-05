@@ -33,8 +33,8 @@ In a world where political figures, corporations, and media entities frequently 
 
 ## 🚀 Quick Start
 
-### Bitcoin-Style Setup (Recommended)
-TruthChain now features a Bitcoin-style experience with persistent configuration:
+### Bitcoin-Style Setup (v0.2.0 - Enhanced Security)
+TruthChain v0.2.0 features **Bitcoin-style security** with strict genesis validation and enforced consensus:
 
 ```bash
 # Download and run TruthChain
@@ -45,11 +45,19 @@ TruthChain now features a Bitcoin-style experience with persistent configuration
 # 2. Select network (Mainnet/Testnet/Local)
 # 3. Choose node modes (API/Mesh/Beacon/Mining)
 # 4. Configure ports and settings
-# 5. Configuration automatically saved for future starts
+# 5. Bitcoin-style initial sync from trusted peers
+# 6. Configuration automatically saved for future starts
 
-# Subsequent runs: App loads existing data automatically
+# Subsequent runs: App validates genesis and loads existing data
 # No setup required - just works like Bitcoin Core!
 ```
+
+### 🛡️ New Security Features (v0.2.0)
+- **Canonical Genesis**: All nodes must have the same genesis block
+- **No Local Forks**: New nodes cannot create local genesis blocks
+- **Header-First Sync**: Faster, safer synchronization
+- **Burn-Weight Consensus**: Prefers chains with higher character burn
+- **Automatic Reorgs**: Switches to better chains automatically
 
 ### What You'll Get
 - ✅ **Bitcoin-Style Restart**: No crashes, loads existing data automatically

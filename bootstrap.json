@@ -1,7 +1,7 @@
 [
   {
-    "address": "mainnet.truth-chain.org:9876",
-    "description": "Official TruthChain Mainnet Node (Your Domain)",
+    "address": "168.231.108.135:9876",
+    "description": "TruthChain Mainnet Node",
     "region": "Global",
     "is_beacon": true,
     "trust_score": 0.9,

@@ -13,7 +13,8 @@ const (
 	MainnetVersionByte = 0x42             // Mainnet version byte
 
 	// Genesis block hash - DO NOT CHANGE (hardcoded for chain identity)
-	MainnetGenesisHash = "dfefc56cc8f5f1f1c825dc5a97f9b4f203b04fddddec0627f0ae391003b99705"
+	// This is the canonical genesis block hash that all nodes must accept
+	MainnetGenesisHash = "38025032e3f12e8270d7fdb2bf2dad92b9b3d5a53967f40eeebe4e7f52c1a934"
 
 	// Network identifiers
 	MainnetNetworkID = "truthchain-mainnet"
@@ -70,6 +71,16 @@ const (
 	// API configuration
 	DefaultAPIPort = 8080
 	APITimeout     = 30 * time.Second
+
+	// Bitcoin-style sync configuration
+	SyncIntervalFast     = 30 * time.Second // Fast sync interval for active nodes
+	SyncIntervalNormal   = 60 * time.Second // Normal sync interval
+	SyncIntervalSlow     = 5 * time.Minute  // Slow sync interval for passive nodes
+	HeaderSyncTimeout    = 10 * time.Second // Timeout for header-only sync
+	BlockSyncTimeout     = 30 * time.Second // Timeout for full block sync
+	MaxHeadersPerRequest = 2000             // Maximum headers per sync request
+	MaxBlocksPerRequest  = 100              // Maximum blocks per sync request
+	ReorgThreshold       = 6                // Blocks needed for reorg confirmation
 )
 
 // ValidateMainnetRules checks if the given parameters match mainnet consensus
@@ -88,4 +99,60 @@ func IsMainnetGenesis(block *Block) bool {
 	return block.Index == 0 &&
 		block.Hash == MainnetGenesisHash &&
 		block.Timestamp == MainnetGenesisTimestamp
+}
+
+// ValidateCanonicalGenesis enforces the canonical genesis block
+// This is the Bitcoin-style security check that prevents fake forks
+func ValidateCanonicalGenesis(block *Block) error {
+	if block.Index != 0 {
+		return fmt.Errorf("not a genesis block (index %d)", block.Index)
+	}
+
+	if block.Hash != MainnetGenesisHash {
+		return fmt.Errorf("invalid genesis hash: expected %s, got %s", MainnetGenesisHash, block.Hash)
+	}
+
+	if block.Timestamp != MainnetGenesisTimestamp {
+		return fmt.Errorf("invalid genesis timestamp: expected %d, got %d", MainnetGenesisTimestamp, block.Timestamp)
+	}
+
+	return nil
+}
+
+// CalculateChainBurnScore calculates the total "burn" (characters) in a chain
+// This is TruthChain's equivalent to Bitcoin's total work
+func CalculateChainBurnScore(blocks []*Block) int64 {
+	var totalBurn int64
+	for _, block := range blocks {
+		totalBurn += int64(block.GetCharacterCount())
+	}
+	return totalBurn
+}
+
+// ValidateChainHeaders validates a sequence of block headers
+// This is the Bitcoin-style header-first validation
+func ValidateChainHeaders(headers []*BlockHeader) error {
+	if len(headers) == 0 {
+		return fmt.Errorf("no headers to validate")
+	}
+
+	// Validate genesis if present
+	if headers[0].Index == 0 {
+		if headers[0].Hash != MainnetGenesisHash {
+			return fmt.Errorf("invalid genesis header hash: expected %s, got %s",
+				MainnetGenesisHash, headers[0].Hash)
+		}
+	}
+
+	// Validate header chain linkage
+	for i := 1; i < len(headers); i++ {
+		if headers[i].Index != headers[i-1].Index+1 {
+			return fmt.Errorf("header index discontinuity at %d", i)
+		}
+		if headers[i].PrevHash != headers[i-1].Hash {
+			return fmt.Errorf("header prev_hash mismatch at index %d", headers[i].Index)
+		}
+	}
+
+	return nil
 }

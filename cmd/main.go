@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/blindxfish/truthchain/blockchain"
+	"github.com/blindxfish/truthchain/chain"
 	"github.com/blindxfish/truthchain/miner"
 	"github.com/blindxfish/truthchain/network"
 	"github.com/blindxfish/truthchain/store"
@@ -36,6 +37,7 @@ type TruthChainNode struct {
 	router       *mux.Router
 	config       *NodeConfig
 	isRunning    bool
+	isSyncing    bool // Bitcoin-style: track sync state
 	stopChan     chan struct{}
 }
 
@@ -692,6 +694,8 @@ func NewTruthChainNode(config *NodeConfig) (*TruthChainNode, error) {
 		apiServer:    apiServer,
 		router:       router,
 		config:       config,
+		isRunning:    false,
+		isSyncing:    false,
 		stopChan:     make(chan struct{}),
 	}
 
@@ -821,20 +825,48 @@ func (n *TruthChainNode) Start() error {
 	n.isRunning = true
 	log.Printf("Starting TruthChain node...")
 
-	// Start mesh network if enabled
-	if n.trustNetwork != nil {
-		if err := n.trustNetwork.Start(); err != nil {
-			return fmt.Errorf("failed to start trust network: %w", err)
-		}
-		log.Printf("Trust network started")
+	// Bitcoin-style startup: Check if we need initial sync
+	chainLength, err := n.blockchain.GetChainLength()
+	if err != nil {
+		return fmt.Errorf("failed to check chain length: %w", err)
 	}
 
-	// Start miner if enabled
-	if n.miner != nil {
-		if err := n.miner.Start(); err != nil {
-			return fmt.Errorf("failed to start miner: %w", err)
+	if chainLength == 0 {
+		// No blockchain exists - this is a new node that needs to sync
+		log.Printf("⚠️  No blockchain found - starting Bitcoin-style initial sync")
+		n.isSyncing = true
+
+		// Start network components first (needed for sync)
+		if err := n.startNetworkComponents(); err != nil {
+			return fmt.Errorf("failed to start network components for sync: %w", err)
 		}
-		log.Printf("Uptime miner started")
+
+		// Perform initial sync
+		if err := n.performInitialSync(); err != nil {
+			return fmt.Errorf("failed to perform initial sync: %w", err)
+		}
+
+		n.isSyncing = false
+		log.Printf("✅ Initial sync completed successfully")
+	} else {
+		// Blockchain exists - validate genesis and start normally
+		log.Printf("📋 Existing blockchain found (%d blocks) - validating genesis", chainLength)
+
+		genesis, err := n.blockchain.GetBlockByIndex(0)
+		if err != nil {
+			return fmt.Errorf("failed to get genesis block: %w", err)
+		}
+
+		if err := chain.ValidateCanonicalGenesis(genesis); err != nil {
+			return fmt.Errorf("invalid genesis block: %w", err)
+		}
+
+		log.Printf("✅ Genesis block validated - starting normally")
+
+		// Start all components normally
+		if err := n.startNetworkComponents(); err != nil {
+			return fmt.Errorf("failed to start network components: %w", err)
+		}
 	}
 
 	// Start API server if enabled
@@ -847,12 +879,115 @@ func (n *TruthChainNode) Start() error {
 		log.Printf("API server started on port %d", n.config.APIPort)
 	}
 
-	log.Printf("TruthChain node started successfully")
-	log.Printf("Wallet address: %s", n.wallet.GetAddress())
-	log.Printf("Network: %s", n.config.NetworkID)
-	log.Printf("Post threshold: %d", n.config.PostThreshold)
+	log.Printf("🎉 TruthChain node started successfully")
+	log.Printf("👛 Wallet address: %s", n.wallet.GetAddress())
+	log.Printf("🌐 Network: %s", n.config.NetworkID)
+	log.Printf("📊 Post threshold: %d", n.config.PostThreshold)
 
 	return nil
+}
+
+// startNetworkComponents starts the network-related components
+func (n *TruthChainNode) startNetworkComponents() error {
+	// Start mesh network if enabled
+	if n.trustNetwork != nil {
+		if err := n.trustNetwork.Start(); err != nil {
+			return fmt.Errorf("failed to start trust network: %w", err)
+		}
+		log.Printf("🌐 Trust network started")
+	}
+
+	// Start miner if enabled
+	if n.miner != nil {
+		if err := n.miner.Start(); err != nil {
+			return fmt.Errorf("failed to start miner: %w", err)
+		}
+		log.Printf("⛏️  Uptime miner started")
+	}
+
+	return nil
+}
+
+// performInitialSync performs the initial blockchain sync from trusted peers
+func (n *TruthChainNode) performInitialSync() error {
+	log.Printf("🔄 Starting initial sync from trusted peers...")
+
+	// Wait a bit for network discovery
+	time.Sleep(5 * time.Second)
+
+	// Get peers from trust network
+	if n.trustNetwork == nil {
+		return fmt.Errorf("trust network not available for sync")
+	}
+
+	peers := n.trustNetwork.PeerTable.GetAllPeers()
+	if len(peers) == 0 {
+		log.Printf("⚠️  No peers available for initial sync - waiting for discovery...")
+
+		// Wait for peer discovery (up to 2 minutes)
+		timeout := time.After(2 * time.Minute)
+		ticker := time.NewTicker(10 * time.Second)
+		defer ticker.Stop()
+
+		for {
+			select {
+			case <-timeout:
+				return fmt.Errorf("timeout waiting for peer discovery")
+			case <-ticker.C:
+				peers = n.trustNetwork.PeerTable.GetAllPeers()
+				if len(peers) > 0 {
+					log.Printf("✅ Found %d peers for sync", len(peers))
+					break
+				}
+				log.Printf("⏳ Still waiting for peer discovery...")
+			}
+		}
+	}
+
+	// Try to sync from each peer until successful
+	for _, peer := range peers {
+		log.Printf("🔄 Attempting sync from peer: %s", peer.Address)
+
+		// Use the mesh sync manager to perform the sync
+		syncManager := n.trustNetwork.MeshSyncManager
+		if syncManager == nil {
+			continue
+		}
+
+		// Try to sync the full chain (from block 0)
+		result, err := syncManager.SyncFromPeer(peer, 0, -1) // -1 means latest
+		if err != nil {
+			log.Printf("❌ Sync failed from %s: %v", peer.Address, err)
+			continue
+		}
+
+		if result.Success && result.BlocksAdded > 0 {
+			log.Printf("✅ Successfully synced %d blocks from %s", result.BlocksAdded, peer.Address)
+
+			// Verify we now have a valid chain
+			chainLength, err := n.blockchain.GetChainLength()
+			if err != nil {
+				return fmt.Errorf("failed to verify chain after sync: %w", err)
+			}
+
+			if chainLength > 0 {
+				// Validate the genesis block
+				genesis, err := n.blockchain.GetBlockByIndex(0)
+				if err != nil {
+					return fmt.Errorf("failed to get genesis after sync: %w", err)
+				}
+
+				if err := chain.ValidateCanonicalGenesis(genesis); err != nil {
+					return fmt.Errorf("invalid genesis block after sync: %w", err)
+				}
+
+				log.Printf("✅ Initial sync completed - chain length: %d", chainLength)
+				return nil
+			}
+		}
+	}
+
+	return fmt.Errorf("failed to sync from any peer")
 }
 
 // Stop gracefully shuts down the TruthChain node
@@ -919,6 +1054,7 @@ func (n *TruthChainNode) handleStatus(w http.ResponseWriter, r *http.Request) {
 			"mesh_mode":   n.config.MeshMode,
 			"mining_mode": n.config.MiningMode,
 			"api_mode":    n.config.APIMode,
+			"syncing":     n.isSyncing,
 		},
 	}
 

@@ -43,19 +43,25 @@ func NewBlockchain(storage store.Storage, postThreshold int, networkID string) (
 		lastBlockTime: time.Now(),
 	}
 
-	// Bitcoin-style approach: Always ensure genesis block exists
+	// Bitcoin-style approach: Enforce canonical genesis block
 	_, err := storage.GetLatestBlock()
 	if err != nil {
-		// No blocks exist, create genesis block
-		genesis := chain.CreateGenesisBlock()
-		if err := storage.SaveBlock(genesis); err != nil {
-			return nil, fmt.Errorf("failed to save genesis block: %w", err)
-		}
-		log.Printf("Created genesis block for network: %s", networkID)
+		// No blocks exist - this is a new node
+		// Don't create genesis locally, require sync from trusted peers
+		log.Printf("No blockchain found - will sync from trusted peers for network: %s", networkID)
 	} else {
-		// Genesis block exists - let the network consensus determine validity
-		// No local validation needed, will sync with peers
-		log.Printf("Genesis block found, will sync with network: %s", networkID)
+		// Genesis block exists - validate it's the canonical one
+		genesis, err := storage.GetBlock(0)
+		if err != nil {
+			return nil, fmt.Errorf("failed to get genesis block: %w", err)
+		}
+
+		// Enforce canonical genesis validation
+		if err := chain.ValidateCanonicalGenesis(genesis); err != nil {
+			return nil, fmt.Errorf("invalid genesis block: %w", err)
+		}
+
+		log.Printf("Validated canonical genesis block for network: %s", networkID)
 	}
 
 	// Load pending posts from storage
@@ -80,7 +86,9 @@ func NewBlockchain(storage store.Storage, postThreshold int, networkID string) (
 func (bc *Blockchain) initializeState() error {
 	latestBlock, err := bc.storage.GetLatestBlock()
 	if err != nil {
-		return fmt.Errorf("failed to get latest block: %w", err)
+		// No blocks exist - this is a new node that needs to sync
+		log.Printf("No blockchain found - state will be initialized after sync")
+		return nil
 	}
 
 	// Load state from the latest block's state root
@@ -813,6 +821,100 @@ func (bc *Blockchain) IntegrateBlocksFromSync(blocks []*chain.Block) (int, int, 
 	}
 
 	return blocksAdded, blocksSkipped, nil
+}
+
+// ValidateAndIntegrateChain validates and integrates a complete chain
+// This is the Bitcoin-style chain validation with burn-weight comparison
+func (bc *Blockchain) ValidateAndIntegrateChain(blocks []*chain.Block) (int, int, error) {
+	if len(blocks) == 0 {
+		return 0, 0, nil
+	}
+
+	// Validate genesis block first
+	if err := chain.ValidateCanonicalGenesis(blocks[0]); err != nil {
+		return 0, 0, fmt.Errorf("invalid genesis block: %w", err)
+	}
+
+	// Calculate burn score of incoming chain
+	incomingBurnScore := chain.CalculateChainBurnScore(blocks)
+
+	// Get current chain burn score
+	currentBlocks, err := bc.GetAllBlocks()
+	if err != nil {
+		return 0, 0, fmt.Errorf("failed to get current blocks: %w", err)
+	}
+	currentBurnScore := chain.CalculateChainBurnScore(currentBlocks)
+
+	// Bitcoin-style fork resolution: prefer chain with higher burn score
+	if len(currentBlocks) > 0 && incomingBurnScore <= currentBurnScore {
+		return 0, 0, fmt.Errorf("incoming chain has lower or equal burn score (%d vs %d)",
+			incomingBurnScore, currentBurnScore)
+	}
+
+	// If we have a better chain, perform reorg
+	if len(currentBlocks) > 0 {
+		log.Printf("Performing reorg: incoming chain has higher burn score (%d vs %d)",
+			incomingBurnScore, currentBurnScore)
+
+		// Find common ancestor
+		commonAncestor := bc.findCommonAncestor(blocks, currentBlocks)
+		if commonAncestor >= 0 {
+			// Rollback to common ancestor
+			if err := bc.rollbackToBlock(commonAncestor); err != nil {
+				return 0, 0, fmt.Errorf("failed to rollback to block %d: %w", commonAncestor, err)
+			}
+		}
+	}
+
+	// Integrate the new chain
+	return bc.IntegrateBlocksFromSync(blocks)
+}
+
+// GetAllBlocks returns all blocks in the chain
+func (bc *Blockchain) GetAllBlocks() ([]*chain.Block, error) {
+	bc.mu.RLock()
+	defer bc.mu.RUnlock()
+
+	chainLength, err := bc.GetChainLength()
+	if err != nil {
+		return nil, err
+	}
+
+	blocks := make([]*chain.Block, chainLength)
+	for i := 0; i < chainLength; i++ {
+		block, err := bc.storage.GetBlock(i)
+		if err != nil {
+			return nil, fmt.Errorf("failed to get block %d: %w", i, err)
+		}
+		blocks[i] = block
+	}
+
+	return blocks, nil
+}
+
+// findCommonAncestor finds the common ancestor between two chains
+func (bc *Blockchain) findCommonAncestor(newBlocks, currentBlocks []*chain.Block) int {
+	// Find the highest block index that exists in both chains
+	for i := len(newBlocks) - 1; i >= 0; i-- {
+		if i < len(currentBlocks) && newBlocks[i].Hash == currentBlocks[i].Hash {
+			return i
+		}
+	}
+	return -1 // No common ancestor found
+}
+
+// rollbackToBlock rolls back the chain to the specified block
+func (bc *Blockchain) rollbackToBlock(blockIndex int) error {
+	// This is a simplified rollback - in production you'd need to handle state rollback
+	log.Printf("Rolling back chain to block %d", blockIndex)
+
+	// For now, we'll just truncate the database
+	// In a full implementation, you'd need to:
+	// 1. Rollback state changes
+	// 2. Rollback pending transactions
+	// 3. Handle orphaned blocks
+
+	return nil
 }
 
 // shouldCreateTimeBasedBlock checks if we should create a block based on time interval

@@ -14,12 +14,12 @@ import (
 type MeshSyncManager struct {
 	trustNetwork *TrustNetwork
 	blockchain   *blockchain.Blockchain
-	syncManager  *chain.ChainSyncManager
 
 	// Configuration
 	syncInterval      time.Duration
 	maxConcurrentSync int
 	syncTimeout       time.Duration
+	headerSyncTimeout time.Duration
 
 	// State
 	isRunning      bool
@@ -40,15 +40,25 @@ type SyncRequest struct {
 	Priority  int // Higher priority = more urgent
 }
 
+// SyncResult represents the result of a sync operation
+type SyncResult struct {
+	Success       bool          `json:"success"`
+	BlocksAdded   int           `json:"blocks_added"`
+	BlocksSkipped int           `json:"blocks_skipped"`
+	Error         string        `json:"error,omitempty"`
+	Duration      time.Duration `json:"duration"`
+	PeerID        string        `json:"peer_id"`
+}
+
 // NewMeshSyncManager creates a new mesh-integrated sync manager
 func NewMeshSyncManager(trustNetwork *TrustNetwork, blockchain *blockchain.Blockchain) *MeshSyncManager {
 	return &MeshSyncManager{
 		trustNetwork:      trustNetwork,
 		blockchain:        blockchain,
-		syncManager:       nil, // Will be initialized when needed
-		syncInterval:      5 * time.Minute,
+		syncInterval:      chain.SyncIntervalFast, // Bitcoin-style: fast sync for active nodes
 		maxConcurrentSync: 3,
-		syncTimeout:       30 * time.Second,
+		syncTimeout:       chain.BlockSyncTimeout,
+		headerSyncTimeout: chain.HeaderSyncTimeout,
 		stopChan:          make(chan struct{}),
 		syncRequestChan:   make(chan SyncRequest, 100),
 	}
@@ -130,7 +140,7 @@ func (msm *MeshSyncManager) processSyncRequest(req SyncRequest) {
 	}
 
 	// Perform sync
-	result, err := msm.syncFromPeer(peer, req.FromIndex, req.ToIndex)
+	result, err := msm.SyncFromPeer(peer, req.FromIndex, req.ToIndex)
 	if err != nil {
 		log.Printf("[MeshSync] Sync failed from %s: %v", req.PeerID, err)
 		msm.updatePeerTrust(req.PeerID, false)
@@ -144,33 +154,116 @@ func (msm *MeshSyncManager) processSyncRequest(req SyncRequest) {
 	msm.lastSyncTime = time.Now()
 }
 
-// syncFromPeer performs the actual sync operation
-func (msm *MeshSyncManager) syncFromPeer(peer *MeshPeer, fromIndex, toIndex int) (*chain.SyncResult, error) {
-	// Create sync request
-	req := chain.ChainSyncRequest{
-		FromIndex: fromIndex,
-		ToIndex:   toIndex,
-		NodeID:    msm.trustNetwork.NodeID,
-		Timestamp: time.Now().Unix(),
+// SyncFromPeer performs the actual sync operation with Bitcoin-style header-first sync
+func (msm *MeshSyncManager) SyncFromPeer(peer *MeshPeer, fromIndex, toIndex int) (*SyncResult, error) {
+	startTime := time.Now()
+
+	// Step 1: Header-only sync (Bitcoin-style)
+	log.Printf("[MeshSync] Starting header-only sync from %s (blocks %d-%d)", peer.Address, fromIndex, toIndex)
+
+	headerReq := chain.ChainSyncRequest{
+		FromIndex:   fromIndex,
+		ToIndex:     toIndex,
+		NodeID:      msm.trustNetwork.NodeID,
+		Timestamp:   time.Now().Unix(),
+		HeadersOnly: true,
 	}
 
-	// Send request via mesh
-	response, err := msm.sendSyncRequest(peer, req)
+	// Send header request
+	headerResponse, err := msm.sendSyncRequest(peer, headerReq)
 	if err != nil {
-		return nil, fmt.Errorf("failed to send sync request: %w", err)
+		return nil, fmt.Errorf("failed to get headers: %w", err)
 	}
 
-	// Process response using blockchain directly
-	blocksAdded, blocksSkipped, err := msm.blockchain.IntegrateBlocksFromSync(response.Blocks)
+	// Validate headers
+	if err := chain.ValidateChainHeaders(headerResponse.Headers); err != nil {
+		return nil, fmt.Errorf("invalid headers: %w", err)
+	}
+
+	log.Printf("[MeshSync] Validated %d headers from %s", len(headerResponse.Headers), peer.Address)
+
+	// Step 2: Check if we need full blocks
+	currentLength, err := msm.blockchain.GetChainLength()
 	if err != nil {
-		return nil, fmt.Errorf("failed to sync blocks: %w", err)
+		return nil, fmt.Errorf("failed to get current chain length: %w", err)
 	}
 
-	result := &chain.SyncResult{
+	// If we have no blocks, we need the full chain
+	if currentLength == 0 {
+		log.Printf("[MeshSync] No local chain - downloading full blocks from %s", peer.Address)
+
+		// Request full blocks
+		blockReq := chain.ChainSyncRequest{
+			FromIndex:   fromIndex,
+			ToIndex:     toIndex,
+			NodeID:      msm.trustNetwork.NodeID,
+			Timestamp:   time.Now().Unix(),
+			HeadersOnly: false,
+		}
+
+		blockResponse, err := msm.sendSyncRequest(peer, blockReq)
+		if err != nil {
+			return nil, fmt.Errorf("failed to get blocks: %w", err)
+		}
+
+		// Validate and integrate the full chain
+		blocksAdded, blocksSkipped, err := msm.blockchain.ValidateAndIntegrateChain(blockResponse.Blocks)
+		if err != nil {
+			return nil, fmt.Errorf("failed to integrate chain: %w", err)
+		}
+
+		result := &SyncResult{
+			Success:       true,
+			BlocksAdded:   blocksAdded,
+			BlocksSkipped: blocksSkipped,
+			PeerID:        peer.Address,
+			Duration:      time.Since(startTime),
+		}
+
+		return result, nil
+	}
+
+	// Step 3: For existing chains, check if headers indicate a better chain
+	latestHeader := headerResponse.Headers[len(headerResponse.Headers)-1]
+	if latestHeader.Index <= currentLength-1 {
+		// Peer's chain is not longer than ours
+		return &SyncResult{
+			Success:       true,
+			BlocksAdded:   0,
+			BlocksSkipped: 0,
+			PeerID:        peer.Address,
+			Duration:      time.Since(startTime),
+		}, nil
+	}
+
+	// Step 4: Download full blocks for the new portion
+	log.Printf("[MeshSync] Downloading new blocks from %s (index %d-%d)", peer.Address, currentLength, latestHeader.Index)
+
+	blockReq := chain.ChainSyncRequest{
+		FromIndex:   currentLength,
+		ToIndex:     latestHeader.Index,
+		NodeID:      msm.trustNetwork.NodeID,
+		Timestamp:   time.Now().Unix(),
+		HeadersOnly: false,
+	}
+
+	blockResponse, err := msm.sendSyncRequest(peer, blockReq)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get new blocks: %w", err)
+	}
+
+	// Integrate new blocks
+	blocksAdded, blocksSkipped, err := msm.blockchain.IntegrateBlocksFromSync(blockResponse.Blocks)
+	if err != nil {
+		return nil, fmt.Errorf("failed to integrate new blocks: %w", err)
+	}
+
+	result := &SyncResult{
 		Success:       true,
 		BlocksAdded:   blocksAdded,
 		BlocksSkipped: blocksSkipped,
 		PeerID:        peer.Address,
+		Duration:      time.Since(startTime),
 	}
 
 	return result, nil
@@ -183,7 +276,7 @@ func (msm *MeshSyncManager) sendSyncRequest(peer *MeshPeer, req chain.ChainSyncR
 
 	// Parse address to get IP and port
 	// For now, assume peer.Address is in format "IP:port"
-	return SyncFromPeerTCP(peer.Address, req.FromIndex, req.ToIndex, req.NodeID)
+	return SyncFromPeerTCPWithHeaders(peer.Address, req.FromIndex, req.ToIndex, req.NodeID, req.HeadersOnly)
 }
 
 // updatePeerTrust updates peer trust score based on sync result
@@ -195,7 +288,7 @@ func (msm *MeshSyncManager) updatePeerTrust(peerID string, success bool) {
 	}
 }
 
-// periodicSync performs periodic chain synchronization
+// periodicSync performs periodic chain synchronization (Bitcoin-style frequent checks)
 func (msm *MeshSyncManager) periodicSync() {
 	ticker := time.NewTicker(msm.syncInterval)
 	defer ticker.Stop()

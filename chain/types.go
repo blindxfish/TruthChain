@@ -99,19 +99,21 @@ type BlockHeader struct {
 
 // ChainSyncRequest represents a request to sync blocks from a peer
 type ChainSyncRequest struct {
-	FromIndex int    `json:"from_index"` // Start block index
-	ToIndex   int    `json:"to_index"`   // End block index (optional, -1 for latest)
-	NodeID    string `json:"node_id"`    // Requesting node's ID
-	Timestamp int64  `json:"timestamp"`  // Request timestamp
+	FromIndex   int    `json:"from_index"`   // Start block index
+	ToIndex     int    `json:"to_index"`     // End block index (optional, -1 for latest)
+	NodeID      string `json:"node_id"`      // Requesting node's ID
+	Timestamp   int64  `json:"timestamp"`    // Request timestamp
+	HeadersOnly bool   `json:"headers_only"` // Request only headers (Bitcoin-style)
 }
 
 // ChainSyncResponse represents a response to a chain sync request
 type ChainSyncResponse struct {
-	Blocks    []*Block `json:"blocks"`     // Requested blocks
-	FromIndex int      `json:"from_index"` // Actual start index
-	ToIndex   int      `json:"to_index"`   // Actual end index
-	NodeID    string   `json:"node_id"`    // Responding node's ID
-	Timestamp int64    `json:"timestamp"`  // Response timestamp
+	Blocks    []*Block       `json:"blocks"`     // Requested blocks (if HeadersOnly=false)
+	Headers   []*BlockHeader `json:"headers"`    // Requested headers (if HeadersOnly=true)
+	FromIndex int            `json:"from_index"` // Actual start index
+	ToIndex   int            `json:"to_index"`   // Actual end index
+	NodeID    string         `json:"node_id"`    // Responding node's ID
+	Timestamp int64          `json:"timestamp"`  // Response timestamp
 }
 
 // BeaconDiscoveryRequest represents a request to discover beacon nodes

@@ -44,16 +44,16 @@ Imagine if every tweet, post, or statement made by politicians, companies, or an
 2. **Extract the files** to a folder on your computer
 3. **Open Command Prompt/Terminal** in that folder
 
-### Step 2: Bitcoin-Style Setup (NEW!)
+### Step 2: Bitcoin-Style Setup (v0.2.0 - Enhanced Security!)
 
-TruthChain now features a Bitcoin-style experience with persistent configuration:
+TruthChain v0.2.0 features **Bitcoin-style security** with strict genesis validation and enforced consensus:
 
 ```bash
 # Simply run TruthChain.exe
 ./TruthChain.exe
 ```
 
-**First Time Setup:**
+**First Time Setup (New Node):**
 
 1. **Wallet Configuration**
    - Choose to create a new wallet or import an existing one
@@ -82,16 +82,30 @@ TruthChain now features a Bitcoin-style experience with persistent configuration
 6. **Database Configuration**
    - Choose database file location (default: truthchain.db)
 
-7. **Final Confirmation**
+7. **Initial Sync (NEW!)**
+   - **No local genesis creation** - node will sync from trusted peers
+   - **Bitcoin-style validation** - validates canonical genesis block
+   - **Peer discovery** - automatically finds and connects to other nodes
+   - **Timeout protection** - 2-minute timeout for peer discovery
+
+8. **Final Confirmation**
    - Review your configuration
    - Configuration automatically saved to `truthchain-config.json`
-   - Start the node automatically
+   - Start the node with enhanced security
 
 **Subsequent Runs:**
 - App detects existing data automatically
 - Loads saved configuration from `truthchain-config.json`
+- **Genesis validation** - validates existing blockchain on startup
 - Skips setup entirely - just works like Bitcoin Core!
 - No crashes, no repeated configuration
+
+**🛡️ Security Features (v0.2.0):**
+- **Canonical Genesis**: All nodes must have the same genesis block
+- **No Local Forks**: New nodes cannot create local genesis blocks
+- **Header-First Sync**: Faster, safer synchronization
+- **Burn-Weight Consensus**: Prefers chains with higher character burn
+- **Automatic Reorgs**: Switches to better chains automatically
 
 ### Step 3: Your Wallet Information
 
@@ -326,9 +340,12 @@ curl http://localhost:8080/blockchain/length
 - Change the port in the interactive setup
 - Or stop other services using the same port
 
-**"Genesis block mismatch"**
-- Delete `truthchain.db` to reset the chain
-- Restart the node
+**"Genesis block mismatch" (v0.2.0)**
+- This indicates your node has an invalid genesis block
+- **Do NOT delete your database** - this is a security feature
+- Your node will automatically sync from trusted peers
+- If sync fails, check network connectivity and peer availability
+- The canonical genesis hash is: `38025032e3f12e8270d7fdb2bf2dad92b9b3d5a53967f40eeebe4e7f52c1a934`
 
 **"App crashes on restart"**
 - This is now fixed! TruthChain uses Bitcoin-style restart
@@ -350,7 +367,7 @@ curl http://localhost:8080/blockchain/length
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| `GET` | `/status` | Node and blockchain status |
+| `GET` | `/status` | Node and blockchain status (includes sync state) |
 | `GET` | `/health` | Health check |
 | `GET` | `/wallets/{address}` | Wallet information |
 | `GET` | `/wallets/{address}/balance` | Wallet balance |

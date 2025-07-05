@@ -56,19 +56,41 @@ func handleSyncConnection(conn net.Conn, bc *blockchain.Blockchain, nodeID strin
 		chainLength, _ := bc.GetChainLength()
 		to = chainLength - 1
 	}
-	var blocks []*chain.Block
-	for i := from; i <= to; i++ {
-		block, err := bc.GetBlockByIndex(i)
-		if err == nil && block != nil {
-			blocks = append(blocks, block)
+
+	var resp chain.ChainSyncResponse
+	resp.FromIndex = from
+	resp.ToIndex = to
+	resp.NodeID = nodeID
+	resp.Timestamp = time.Now().Unix()
+
+	if req.HeadersOnly {
+		// Header-only response
+		var headers []*chain.BlockHeader
+		for i := from; i <= to; i++ {
+			block, err := bc.GetBlockByIndex(i)
+			if err == nil && block != nil {
+				header := &chain.BlockHeader{
+					Index:     block.Index,
+					Timestamp: block.Timestamp,
+					PrevHash:  block.PrevHash,
+					Hash:      block.Hash,
+					CharCount: block.CharCount,
+					PostCount: block.GetPostCount(),
+				}
+				headers = append(headers, header)
+			}
 		}
-	}
-	resp := chain.ChainSyncResponse{
-		Blocks:    blocks,
-		FromIndex: from,
-		ToIndex:   to,
-		NodeID:    nodeID,
-		Timestamp: time.Now().Unix(),
+		resp.Headers = headers
+	} else {
+		// Full block response
+		var blocks []*chain.Block
+		for i := from; i <= to; i++ {
+			block, err := bc.GetBlockByIndex(i)
+			if err == nil && block != nil {
+				blocks = append(blocks, block)
+			}
+		}
+		resp.Blocks = blocks
 	}
 	respBytes, _ := json.Marshal(resp)
 	writer.Write(respBytes)
@@ -79,6 +101,11 @@ func handleSyncConnection(conn net.Conn, bc *blockchain.Blockchain, nodeID strin
 
 // SyncFromPeerTCP connects to a peer and requests blocks via TCP
 func SyncFromPeerTCP(peerAddr string, fromIndex int, toIndex int, nodeID string) (*chain.ChainSyncResponse, error) {
+	return SyncFromPeerTCPWithHeaders(peerAddr, fromIndex, toIndex, nodeID, false)
+}
+
+// SyncFromPeerTCPWithHeaders connects to a peer and requests blocks or headers via TCP
+func SyncFromPeerTCPWithHeaders(peerAddr string, fromIndex int, toIndex int, nodeID string, headersOnly bool) (*chain.ChainSyncResponse, error) {
 	conn, err := net.DialTimeout("tcp", peerAddr, 5*time.Second)
 	if err != nil {
 		return nil, fmt.Errorf("failed to connect to peer %s: %w", peerAddr, err)
@@ -89,10 +116,11 @@ func SyncFromPeerTCP(peerAddr string, fromIndex int, toIndex int, nodeID string)
 
 	// Send request
 	req := chain.ChainSyncRequest{
-		FromIndex: fromIndex,
-		ToIndex:   toIndex,
-		NodeID:    nodeID,
-		Timestamp: time.Now().Unix(),
+		FromIndex:   fromIndex,
+		ToIndex:     toIndex,
+		NodeID:      nodeID,
+		Timestamp:   time.Now().Unix(),
+		HeadersOnly: headersOnly,
 	}
 	reqBytes, _ := json.Marshal(req)
 	writer.Write(reqBytes)
