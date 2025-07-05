@@ -43,12 +43,31 @@ func NewBlockchain(storage store.Storage, postThreshold int, networkID string) (
 		lastBlockTime: time.Now(),
 	}
 
-	// Bitcoin-style approach: Enforce canonical genesis block
+	// Bitcoin-style approach: Check for existing blockchain
 	_, err := storage.GetLatestBlock()
 	if err != nil {
-		// No blocks exist - this is a new node
-		// Don't create genesis locally, require sync from trusted peers
-		log.Printf("No blockchain found - will sync from trusted peers for network: %s", networkID)
+		// No blocks exist - check if this node has genesis authority
+		authority, authErr := chain.ValidateGenesisAuthority()
+		if authErr != nil {
+			// No authority - this node must sync from trusted peers
+			log.Printf("No blockchain found - will sync from trusted peers for network: %s", networkID)
+			log.Printf("Genesis authority not found - node must sync from mainnet.truth-chain.org")
+		} else {
+			// Has authority - create the genesis block
+			log.Printf("Genesis authority found - creating authorized genesis block")
+			genesis, err := chain.CreateAuthorizedGenesisBlock(authority)
+			if err != nil {
+				return nil, fmt.Errorf("failed to create authorized genesis block: %w", err)
+			}
+
+			// Save the genesis block
+			if err := storage.SaveBlock(genesis); err != nil {
+				return nil, fmt.Errorf("failed to save genesis block: %w", err)
+			}
+
+			log.Printf("✅ Created authorized genesis block for network: %s", networkID)
+			log.Printf("🎉 Genesis authority confirmed - chain started successfully")
+		}
 	} else {
 		// Genesis block exists - validate it's the canonical one
 		genesis, err := storage.GetBlock(0)

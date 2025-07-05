@@ -1,0 +1,12 @@
+{
+  "nodes": [
+    {
+      "address": "168.231.108.135:9876",
+      "description": "TruthChain Mainnet Node",
+      "region": "Global",
+      "is_beacon": true,
+      "trust_score": 0.9,
+      "last_seen": 0
+    }
+  ]
+}

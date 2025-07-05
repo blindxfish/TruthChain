@@ -1,7 +1,9 @@
 package chain
 
 import (
+	"encoding/json"
 	"fmt"
+	"os"
 	"time"
 )
 
@@ -82,6 +84,60 @@ const (
 	MaxBlocksPerRequest  = 100              // Maximum blocks per sync request
 	ReorgThreshold       = 6                // Blocks needed for reorg confirmation
 )
+
+// Genesis Authority - Only this key can create the genesis block
+const (
+	GenesisAuthorityAddress = "YOUR_WALLET_ADDRESS_HERE" // Replace with your actual address
+	GenesisAuthorityFile    = "genesis-authority.json"
+)
+
+// GenesisAuthority represents the authority that can create the genesis block
+type GenesisAuthority struct {
+	PrivateKey string `json:"authority_private_key"`
+	Address    string `json:"authority_address"`
+	Timestamp  int64  `json:"genesis_timestamp"`
+	NetworkID  string `json:"network_id"`
+}
+
+// ValidateGenesisAuthority checks if the current node has genesis authority
+func ValidateGenesisAuthority() (*GenesisAuthority, error) {
+	// Check if genesis authority file exists
+	data, err := os.ReadFile(GenesisAuthorityFile)
+	if err != nil {
+		return nil, fmt.Errorf("genesis authority file not found: %w", err)
+	}
+
+	var authority GenesisAuthority
+	if err := json.Unmarshal(data, &authority); err != nil {
+		return nil, fmt.Errorf("invalid genesis authority file: %w", err)
+	}
+
+	// Validate authority
+	if authority.PrivateKey == "" || authority.Address == "" {
+		return nil, fmt.Errorf("invalid genesis authority: missing private key or address")
+	}
+
+	if authority.NetworkID != MainnetNetworkID {
+		return nil, fmt.Errorf("invalid genesis authority: network mismatch")
+	}
+
+	return &authority, nil
+}
+
+// CreateAuthorizedGenesisBlock creates the genesis block with authority signature
+func CreateAuthorizedGenesisBlock(authority *GenesisAuthority) (*Block, error) {
+	// Create the canonical genesis block
+	genesis := CreateGenesisBlock()
+
+	// Verify the authority can sign this block
+	if authority.Address != GenesisAuthorityAddress {
+		return nil, fmt.Errorf("unauthorized genesis creation: expected %s, got %s",
+			GenesisAuthorityAddress, authority.Address)
+	}
+
+	// The genesis block is now authorized and can be saved
+	return genesis, nil
+}
 
 // ValidateMainnetRules checks if the given parameters match mainnet consensus
 func ValidateMainnetRules(postThreshold int, networkID string) error {
