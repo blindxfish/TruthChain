@@ -19,6 +19,11 @@
 - **Fix**: Sync server now uses dedicated port 9877 by default
 - **Result**: No more "bind: address already in use" errors
 
+### Self-Sync Prevention
+- **Issue**: Nodes were trying to sync from themselves when bootstrapping from their own domain
+- **Fix**: Added detection to prevent nodes from syncing from their own address
+- **Result**: No more self-referential sync loops
+
 ### Logging Visibility
 - **Issue**: Users couldn't see node activity on the command line
 - **Fix**: Implemented dual logging (console + file)

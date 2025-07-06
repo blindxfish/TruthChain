@@ -366,9 +366,15 @@ func (msm *MeshSyncManager) getBestPeersForSync(maxPeers int) []*MeshPeer {
 	// Get peers from peer table
 	peers := msm.trustNetwork.PeerTable.GetConnectedPeers()
 
-	// Filter and sort by trust score
+	// Filter and sort by trust score, excluding self
 	var suitablePeers []*MeshPeer
 	for _, peer := range peers {
+		// Skip if this peer is likely our own node (prevent self-sync)
+		if msm.isOwnAddress(peer.Address) {
+			log.Printf("[MeshSync] Skipping self-sync for peer %s (detected as own address)", peer.Address)
+			continue
+		}
+
 		if peer.TrustScore >= 0.3 && peer.IsConnected {
 			suitablePeers = append(suitablePeers, peer)
 		}
@@ -389,6 +395,32 @@ func (msm *MeshSyncManager) getBestPeersForSync(maxPeers int) []*MeshPeer {
 	}
 
 	return suitablePeers
+}
+
+// isOwnAddress checks if the given address is likely our own node
+func (msm *MeshSyncManager) isOwnAddress(peerAddr string) bool {
+	// Check if the address contains localhost or our own domain
+	if strings.Contains(peerAddr, "localhost") || strings.Contains(peerAddr, "127.0.0.1") {
+		return true
+	}
+
+	// Check if it's the mainnet domain (which is our own server)
+	if strings.Contains(peerAddr, "mainnet.truth-chain.org") {
+		return true
+	}
+
+	// Check if the port matches our mesh port (additional check)
+	lastColon := strings.LastIndex(peerAddr, ":")
+	if lastColon != -1 {
+		portStr := peerAddr[lastColon+1:]
+		if portStr == "9876" { // Default mesh port
+			// This is a heuristic - if it's the default mesh port and we're the mainnet server
+			// it's likely us
+			return true
+		}
+	}
+
+	return false
 }
 
 // RequestSync requests a sync from a specific peer
