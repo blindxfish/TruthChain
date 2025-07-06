@@ -3,6 +3,7 @@ package network
 import (
 	"fmt"
 	"log"
+	"strings"
 	"sync"
 	"time"
 
@@ -20,6 +21,7 @@ type MeshSyncManager struct {
 	maxConcurrentSync int
 	syncTimeout       time.Duration
 	headerSyncTimeout time.Duration
+	syncPort          int
 
 	// State
 	isRunning      bool
@@ -51,7 +53,7 @@ type SyncResult struct {
 }
 
 // NewMeshSyncManager creates a new mesh-integrated sync manager
-func NewMeshSyncManager(trustNetwork *TrustNetwork, blockchain *blockchain.Blockchain) *MeshSyncManager {
+func NewMeshSyncManager(trustNetwork *TrustNetwork, blockchain *blockchain.Blockchain, syncPort int) *MeshSyncManager {
 	return &MeshSyncManager{
 		trustNetwork:      trustNetwork,
 		blockchain:        blockchain,
@@ -59,6 +61,7 @@ func NewMeshSyncManager(trustNetwork *TrustNetwork, blockchain *blockchain.Block
 		maxConcurrentSync: 3,
 		syncTimeout:       chain.BlockSyncTimeout,
 		headerSyncTimeout: chain.HeaderSyncTimeout,
+		syncPort:          syncPort,
 		stopChan:          make(chan struct{}),
 		syncRequestChan:   make(chan SyncRequest, 100),
 	}
@@ -274,9 +277,24 @@ func (msm *MeshSyncManager) sendSyncRequest(peer *MeshPeer, req chain.ChainSyncR
 	// TODO: Implement actual mesh network communication
 	// For now, use the transport layer directly
 
-	// Parse address to get IP and port
-	// For now, assume peer.Address is in format "IP:port"
-	return SyncFromPeerTCPWithHeaders(peer.Address, req.FromIndex, req.ToIndex, req.NodeID, req.HeadersOnly)
+	// Convert mesh address to sync address by changing the port
+	// peer.Address is in format "IP:meshPort", we need "IP:syncPort"
+	syncAddr := msm.convertToSyncAddress(peer.Address)
+	return SyncFromPeerTCPWithHeaders(syncAddr, req.FromIndex, req.ToIndex, req.NodeID, req.HeadersOnly)
+}
+
+// convertToSyncAddress converts a mesh address to a sync address
+func (msm *MeshSyncManager) convertToSyncAddress(meshAddr string) string {
+	// Parse the mesh address to get IP and mesh port
+	lastColon := strings.LastIndex(meshAddr, ":")
+	if lastColon == -1 {
+		// If no port found, return original address
+		return meshAddr
+	}
+
+	ip := meshAddr[:lastColon]
+	// Use configured sync port
+	return fmt.Sprintf("%s:%d", ip, msm.syncPort)
 }
 
 // updatePeerTrust updates peer trust score based on sync result

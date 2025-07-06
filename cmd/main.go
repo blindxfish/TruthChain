@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"os"
@@ -46,6 +47,7 @@ type NodeConfig struct {
 	DBPath            string
 	APIPort           int
 	MeshPort          int
+	SyncPort          int
 	PostThreshold     int
 	NetworkID         string
 	BeaconMode        bool
@@ -145,16 +147,18 @@ func saveConfig(config *NodeConfig) error {
 }
 
 func main() {
-	// Initialize logging to file in logs/truthchain.log
+	// Initialize dual logging: both console and file
 	if _, err := os.Stat("logs"); os.IsNotExist(err) {
 		_ = os.Mkdir("logs", 0755)
 	}
 	logFile, err := os.OpenFile("logs/truthchain.log", os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0666)
 	if err == nil {
-		log.SetOutput(logFile)
+		// Create multi-writer for both console and file
+		multiWriter := io.MultiWriter(os.Stdout, logFile)
+		log.SetOutput(multiWriter)
 		log.Println("==== TruthChain node started ====")
 	} else {
-		log.Printf("Failed to log to file, using default stderr: %v", err)
+		log.Printf("Failed to log to file, using console only: %v", err)
 	}
 
 	// Check if user wants to skip interactive setup
@@ -317,6 +321,7 @@ func runInteractiveSetup() *NodeConfig {
 		DBPath:            dbPath,
 		APIPort:           ports.APIPort,
 		MeshPort:          ports.MeshPort,
+		SyncPort:          ports.SyncPort,
 		PostThreshold:     postThreshold,
 		NetworkID:         networkID,
 		BeaconMode:        modes.BeaconMode,
@@ -351,6 +356,7 @@ type NodeModes struct {
 type PortConfig struct {
 	APIPort  int
 	MeshPort int
+	SyncPort int
 }
 
 func selectNetwork(reader *bufio.Reader) string {
@@ -434,10 +440,11 @@ func configurePorts(reader *bufio.Reader, modes *NodeModes) *PortConfig {
 		ports.APIPort = getPort(reader, "API Server Port", 8080)
 	}
 
-	// Mesh Port (handles both mesh communication and chain sync)
+	// Mesh Port (handles mesh communication)
 	if modes.MeshMode {
 		ports.MeshPort = getPort(reader, "Mesh Network Port", 9876)
-		fmt.Println("ℹ️  Note: Chain sync is handled through the mesh network on the same port")
+		ports.SyncPort = getPort(reader, "Chain Sync Port", 9877)
+		fmt.Println("ℹ️  Note: Chain sync uses a separate port to avoid conflicts")
 	}
 
 	return ports
@@ -590,7 +597,8 @@ func showFinalConfig(networkID string, modes *NodeModes, ports *PortConfig, doma
 		fmt.Printf("  ✅ API Server (Port: %d)\n", ports.APIPort)
 	}
 	if modes.MeshMode {
-		fmt.Printf("  ✅ Mesh Network (Port: %d) - handles mesh + chain sync\n", ports.MeshPort)
+		fmt.Printf("  ✅ Mesh Network (Port: %d)\n", ports.MeshPort)
+		fmt.Printf("  ✅ Chain Sync (Port: %d)\n", ports.SyncPort)
 	}
 	if modes.BeaconMode {
 		fmt.Printf("  ✅ Beacon Mode (Domain: %s)\n", domain)
@@ -683,6 +691,7 @@ func NewTruthChainNode(config *NodeConfig) (*TruthChainNode, error) {
 		nil, // UptimeTracker (set later if mining enabled)
 		blockchain,
 		config.MeshPort,
+		config.SyncPort,
 		"bootstrap.json", // Bootstrap config file
 	)
 
@@ -909,15 +918,15 @@ func (n *TruthChainNode) startNetworkComponents() error {
 		log.Printf("🌐 Trust network started")
 	}
 
-	// Start sync server on mesh port if mesh mode is enabled
+	// Start sync server on dedicated sync port if mesh mode is enabled
 	if n.config.MeshMode {
-		syncAddr := fmt.Sprintf(":%d", n.config.MeshPort)
+		syncAddr := fmt.Sprintf(":%d", n.config.SyncPort)
 		go func() {
 			if err := network.StartSyncServer(syncAddr, n.blockchain, n.wallet.GetAddress()); err != nil {
 				log.Printf("❌ Failed to start sync server: %v", err)
 			}
 		}()
-		log.Printf("🔄 Sync server started on port %d", n.config.MeshPort)
+		log.Printf("🔄 Sync server started on port %d", n.config.SyncPort)
 	}
 
 	// Start miner if enabled

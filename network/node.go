@@ -99,6 +99,7 @@ func NewTrustNetwork(
 	uptimeTracker *miner.UptimeTracker,
 	blockchain *blockchain.Blockchain,
 	listenPort int,
+	syncPort int,
 	bootstrapConfig string,
 ) *TrustNetwork {
 
@@ -137,7 +138,7 @@ func NewTrustNetwork(
 	network.MessageRouter.Network = network
 
 	// Initialize MeshSyncManager
-	network.MeshSyncManager = NewMeshSyncManager(network, blockchain)
+	network.MeshSyncManager = NewMeshSyncManager(network, blockchain, syncPort)
 
 	return network
 }
