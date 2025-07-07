@@ -33,8 +33,8 @@ In a world where political figures, corporations, and media entities frequently 
 
 ## 🚀 Quick Start
 
-### Bitcoin-Style Setup (v0.2.0 - Enhanced Security)
-TruthChain v0.2.0 features **Bitcoin-style security** with strict genesis validation and enforced consensus:
+### Decentralized Consensus Setup (v0.3.0 - Forkless Consensus)
+TruthChain v0.3.0 features **decentralized, forkless consensus** ensuring no posts or burned characters are ever lost:
 
 ```bash
 # Download and run TruthChain
@@ -45,19 +45,20 @@ TruthChain v0.2.0 features **Bitcoin-style security** with strict genesis valida
 # 2. Select network (Mainnet/Testnet/Local)
 # 3. Choose node modes (API/Mesh/Beacon/Mining)
 # 4. Configure ports and settings
-# 5. Bitcoin-style initial sync from trusted peers
+# 5. Join the decentralized consensus network
 # 6. Configuration automatically saved for future starts
 
-# Subsequent runs: App validates genesis and loads existing data
-# No setup required - just works like Bitcoin Core!
+# Subsequent runs: App joins consensus and loads existing data
+# No setup required - just works with decentralized consensus!
 ```
 
-### 🛡️ New Security Features (v0.2.0)
-- **Canonical Genesis**: All nodes must have the same genesis block
-- **No Local Forks**: New nodes cannot create local genesis blocks
-- **Header-First Sync**: Faster, safer synchronization
-- **Burn-Weight Consensus**: Prefers chains with higher character burn
-- **Automatic Reorgs**: Switches to better chains automatically
+### 🛡️ New Consensus Features (v0.3.0)
+- **Forkless Consensus**: No posts or burned characters are ever lost
+- **Decentralized Block Creation**: Single proposer per block with voting
+- **Trust-Based Proposer Selection**: Nodes with higher trust scores can propose
+- **Post Gossip Protocol**: Posts spread across the network before block creation
+- **Block Proposal & Voting**: Consensus through proposal submission and voting
+- **Trust Score Management**: Dynamic trust scores based on node behavior
 
 ### What You'll Get
 - ✅ **Bitcoin-Style Restart**: No crashes, loads existing data automatically
@@ -177,6 +178,15 @@ Nodes earn characters based on uptime, not proof-of-work. Character issuance dec
 - ✅ Trust-based peer management
 - ✅ Block synchronization across nodes
 
+### Milestone 8: Decentralized Consensus ✅ **COMPLETE**
+- ✅ Forkless consensus system with no data loss
+- ✅ Post gossip protocol for network-wide post distribution
+- ✅ Block proposal and voting mechanism
+- ✅ Trust-based proposer selection
+- ✅ Dynamic trust score management
+- ✅ Single proposer per block with voting consensus
+- ✅ Integration with existing mesh network
+
 ### Milestone 7: User Experience ✅ **COMPLETE**
 - ✅ Bitcoin-style restart system
 - ✅ Self-connection detection
@@ -216,10 +226,10 @@ Nodes earn characters based on uptime, not proof-of-work. Character issuance dec
 - **Required**: For web interfaces and external tools
 
 ### Mesh Mode
-- **Purpose**: Peer-to-peer network communication
+- **Purpose**: Peer-to-peer network communication and consensus
 - **Port**: 9876 (default)
-- **Features**: Block sync, post propagation, peer discovery
-- **Required**: For network participation
+- **Features**: Block sync, post propagation, peer discovery, consensus voting
+- **Required**: For network participation and consensus
 
 ### Beacon Mode
 - **Purpose**: Network discovery and public announcements

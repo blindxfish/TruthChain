@@ -38,8 +38,8 @@ type TruthChainNode struct {
 	router       *mux.Router
 	config       *NodeConfig
 	isRunning    bool
-	isSyncing    bool // Bitcoin-style: track sync state
-	stopChan     chan struct{}
+
+	stopChan chan struct{}
 
 	// Consensus system
 	consensusIntegration *chain.ConsensusIntegration
@@ -48,10 +48,10 @@ type TruthChainNode struct {
 
 // NodeConfig holds the node configuration
 type NodeConfig struct {
-	DBPath            string
-	APIPort           int
-	MeshPort          int
-	SyncPort          int
+	DBPath   string
+	APIPort  int
+	MeshPort int
+
 	PostThreshold     int
 	NetworkID         string
 	BeaconMode        bool
@@ -324,10 +324,10 @@ func runInteractiveSetup() *NodeConfig {
 	}
 
 	config := &NodeConfig{
-		DBPath:            dbPath,
-		APIPort:           ports.APIPort,
-		MeshPort:          ports.MeshPort,
-		SyncPort:          ports.SyncPort,
+		DBPath:   dbPath,
+		APIPort:  ports.APIPort,
+		MeshPort: ports.MeshPort,
+
 		PostThreshold:     postThreshold,
 		NetworkID:         networkID,
 		BeaconMode:        modes.BeaconMode,
@@ -362,7 +362,6 @@ type NodeModes struct {
 type PortConfig struct {
 	APIPort  int
 	MeshPort int
-	SyncPort int
 }
 
 func selectNetwork(reader *bufio.Reader) string {
@@ -449,8 +448,7 @@ func configurePorts(reader *bufio.Reader, modes *NodeModes) *PortConfig {
 	// Mesh Port (handles mesh communication)
 	if modes.MeshMode {
 		ports.MeshPort = getPort(reader, "Mesh Network Port", 9876)
-		ports.SyncPort = getPort(reader, "Chain Sync Port", 9877)
-		fmt.Println("ℹ️  Note: Chain sync uses a separate port to avoid conflicts")
+
 	}
 
 	return ports
@@ -606,7 +604,7 @@ func showFinalConfig(networkID string, modes *NodeModes, ports *PortConfig, doma
 	}
 	if modes.MeshMode {
 		fmt.Printf("  ✅ Mesh Network (Port: %d)\n", ports.MeshPort)
-		fmt.Printf("  ✅ Chain Sync (Port: %d)\n", ports.SyncPort)
+
 	}
 	if modes.BeaconMode {
 		fmt.Printf("  ✅ Beacon Mode (Domain: %s)\n", domain)
@@ -699,7 +697,6 @@ func NewTruthChainNode(config *NodeConfig) (*TruthChainNode, error) {
 		nil, // UptimeTracker (set later if mining enabled)
 		blockchain,
 		config.MeshPort,
-		config.SyncPort,
 		"bootstrap.json", // Bootstrap config file
 	)
 
@@ -724,7 +721,6 @@ func NewTruthChainNode(config *NodeConfig) (*TruthChainNode, error) {
 		router:       router,
 		config:       config,
 		isRunning:    false,
-		isSyncing:    false,
 		stopChan:     make(chan struct{}),
 	}
 
@@ -733,7 +729,7 @@ func NewTruthChainNode(config *NodeConfig) (*TruthChainNode, error) {
 	consensusConfig.PostThreshold = config.PostThreshold
 	consensusIntegration := chain.NewConsensusIntegration(blockchain, myWallet.GetAddress(), consensusConfig)
 	meshManager := trustNet.MeshManager
-	consensusNetwork := network.NewConsensusNetwork(meshManager, consensusIntegration.ConsensusEngine(), myWallet.GetAddress())
+	consensusNetwork := network.NewConsensusNetwork(meshManager, consensusIntegration.ConsensusEngine(), consensusIntegration.SyncManager(), myWallet.GetAddress())
 	node.consensusIntegration = consensusIntegration
 	node.consensusNetwork = consensusNetwork
 
@@ -988,7 +984,6 @@ func (n *TruthChainNode) handleStatus(w http.ResponseWriter, r *http.Request) {
 			"mesh_mode":   n.config.MeshMode,
 			"mining_mode": n.config.MiningMode,
 			"api_mode":    n.config.APIMode,
-			"syncing":     n.isSyncing,
 		},
 	}
 

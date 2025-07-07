@@ -14,6 +14,7 @@ import (
 type ConsensusNetwork struct {
 	meshManager     *MeshManager
 	consensusEngine *chain.ConsensusEngine
+	syncManager     *chain.SyncManager
 	nodeID          string
 
 	// Message routing
@@ -38,18 +39,23 @@ type ConsensusMessage struct {
 
 // Message types
 const (
-	MessageTypePostGossip      = "post_gossip"
-	MessageTypeBlockProposal   = "block_proposal"
-	MessageTypeBlockVote       = "block_vote"
-	MessageTypeBlockCreated    = "block_created"
-	MessageTypeProposalExpired = "proposal_expired"
+	MessageTypePostGossip       = "post_gossip"
+	MessageTypeBlockProposal    = "block_proposal"
+	MessageTypeBlockVote        = "block_vote"
+	MessageTypeBlockCreated     = "block_created"
+	MessageTypeProposalExpired  = "proposal_expired"
+	MessageTypeBlockRequest     = "block_request"
+	MessageTypeBlockResponse    = "block_response"
+	MessageTypeChainTipQuery    = "chain_tip_query"
+	MessageTypeChainTipResponse = "chain_tip_response"
 )
 
 // NewConsensusNetwork creates a new consensus network integration
-func NewConsensusNetwork(meshManager *MeshManager, consensusEngine *chain.ConsensusEngine, nodeID string) *ConsensusNetwork {
+func NewConsensusNetwork(meshManager *MeshManager, consensusEngine *chain.ConsensusEngine, syncManager *chain.SyncManager, nodeID string) *ConsensusNetwork {
 	cn := &ConsensusNetwork{
 		meshManager:     meshManager,
 		consensusEngine: consensusEngine,
+		syncManager:     syncManager,
 		nodeID:          nodeID,
 		messageHandlers: make(map[string]func([]byte, string) error),
 		stopChan:        make(chan struct{}),
@@ -66,6 +72,14 @@ func NewConsensusNetwork(meshManager *MeshManager, consensusEngine *chain.Consen
 		cn.handleBlockCreatedOutbound,
 		cn.handleProposalExpiredOutbound,
 	)
+
+	// Set network callbacks for sync manager
+	if syncManager != nil {
+		syncManager.SetNetworkCallbacks(
+			cn.handleBlockRequestOutbound,
+			cn.handleBlockResponseOutbound,
+		)
+	}
 
 	return cn
 }
@@ -111,6 +125,10 @@ func (cn *ConsensusNetwork) registerMessageHandlers() {
 	cn.messageHandlers[MessageTypeBlockVote] = cn.handleBlockVoteInbound
 	cn.messageHandlers[MessageTypeBlockCreated] = cn.handleBlockCreatedInbound
 	cn.messageHandlers[MessageTypeProposalExpired] = cn.handleProposalExpiredInbound
+	cn.messageHandlers[MessageTypeBlockRequest] = cn.handleBlockRequestInbound
+	cn.messageHandlers[MessageTypeBlockResponse] = cn.handleBlockResponseInbound
+	cn.messageHandlers[MessageTypeChainTipQuery] = cn.handleChainTipQueryInbound
+	cn.messageHandlers[MessageTypeChainTipResponse] = cn.handleChainTipResponseInbound
 }
 
 // messageProcessor processes incoming consensus messages
@@ -304,6 +322,54 @@ func (cn *ConsensusNetwork) handleProposalExpiredInbound(payload []byte, sourceP
 
 	// Handle proposal expiration (e.g., remove from local proposal manager)
 	log.Printf("[ConsensusNetwork] Received proposal expired for block %d from %s", expired.Index, expired.ProposerID)
+	return nil
+}
+
+// Sync-related outbound handlers
+
+func (cn *ConsensusNetwork) handleBlockRequestOutbound(request *chain.BlockRequest) error {
+	return cn.BroadcastMessage(MessageTypeBlockRequest, request)
+}
+
+func (cn *ConsensusNetwork) handleBlockResponseOutbound(response *chain.BlockResponse) error {
+	return cn.BroadcastMessage(MessageTypeBlockResponse, response)
+}
+
+// Sync-related inbound handlers
+
+func (cn *ConsensusNetwork) handleBlockRequestInbound(payload []byte, sourcePeer string) error {
+	var request chain.BlockRequest
+	if err := json.Unmarshal(payload, &request); err != nil {
+		return fmt.Errorf("failed to unmarshal block request: %w", err)
+	}
+
+	if cn.syncManager != nil {
+		return cn.syncManager.HandleBlockRequest(&request)
+	}
+	return nil
+}
+
+func (cn *ConsensusNetwork) handleBlockResponseInbound(payload []byte, sourcePeer string) error {
+	var response chain.BlockResponse
+	if err := json.Unmarshal(payload, &response); err != nil {
+		return fmt.Errorf("failed to unmarshal block response: %w", err)
+	}
+
+	if cn.syncManager != nil {
+		return cn.syncManager.HandleBlockResponse(&response)
+	}
+	return nil
+}
+
+func (cn *ConsensusNetwork) handleChainTipQueryInbound(payload []byte, sourcePeer string) error {
+	// TODO: Implement chain tip query handling
+	log.Printf("[ConsensusNetwork] Received chain tip query from %s", sourcePeer)
+	return nil
+}
+
+func (cn *ConsensusNetwork) handleChainTipResponseInbound(payload []byte, sourcePeer string) error {
+	// TODO: Implement chain tip response handling
+	log.Printf("[ConsensusNetwork] Received chain tip response from %s", sourcePeer)
 	return nil
 }
 

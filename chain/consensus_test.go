@@ -1,6 +1,7 @@
 package chain
 
 import (
+	"math"
 	"testing"
 	"time"
 )
@@ -325,12 +326,12 @@ func TestTrustManager(t *testing.T) {
 	// Test success/failure operations
 	trustManager.SetTrustScore(nodeID, 0.5)
 	trustManager.OnProposalSuccess(nodeID)
-	if score := trustManager.GetTrustScore(nodeID); score != 0.51 {
+	if score := trustManager.GetTrustScore(nodeID); math.Abs(score-0.51) > 0.001 {
 		t.Errorf("Expected trust score 0.51 after success, got %f", score)
 	}
 
 	trustManager.OnProposalFailure(nodeID)
-	if score := trustManager.GetTrustScore(nodeID); score != 0.41 {
+	if score := trustManager.GetTrustScore(nodeID); math.Abs(score-0.41) > 0.001 {
 		t.Errorf("Expected trust score 0.41 after failure, got %f", score)
 	}
 }

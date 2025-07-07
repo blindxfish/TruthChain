@@ -21,6 +21,7 @@ type ConsensusIntegration struct {
 	blockchain      BlockchainInterface
 	consensusEngine *ConsensusEngine
 	blockBuilder    *BlockBuilder
+	syncManager     *SyncManager
 
 	// Configuration
 	config *ConsensusConfig
@@ -48,10 +49,14 @@ func NewConsensusIntegration(
 	// Create block builder
 	blockBuilder := NewBlockBuilder(consensusEngine, config.PostThreshold, 10*time.Minute)
 
+	// Create sync manager
+	syncManager := NewSyncManager(blockchain, nodeID, config)
+
 	ci := &ConsensusIntegration{
 		blockchain:      blockchain,
 		consensusEngine: consensusEngine,
 		blockBuilder:    blockBuilder,
+		syncManager:     syncManager,
 		config:          config,
 		nodeID:          nodeID,
 		stopChan:        make(chan struct{}),
@@ -81,6 +86,17 @@ func (ci *ConsensusIntegration) Start() error {
 
 	ci.isRunning = true
 
+	// Step 1: Check and sync if needed before starting consensus
+	if err := ci.syncManager.CheckAndSyncIfNeeded(); err != nil {
+		log.Printf("[ConsensusIntegration] Initial sync failed: %v", err)
+		// Continue anyway - sync will retry in background
+	}
+
+	// Start sync manager
+	if err := ci.syncManager.Start(); err != nil {
+		return fmt.Errorf("failed to start sync manager: %w", err)
+	}
+
 	// Start consensus engine
 	if err := ci.consensusEngine.Start(); err != nil {
 		return fmt.Errorf("failed to start consensus engine: %w", err)
@@ -106,6 +122,11 @@ func (ci *ConsensusIntegration) Stop() error {
 
 	ci.isRunning = false
 	close(ci.stopChan)
+
+	// Stop sync manager
+	if err := ci.syncManager.Stop(); err != nil {
+		log.Printf("[ConsensusIntegration] Error stopping sync manager: %v", err)
+	}
 
 	// Stop consensus engine
 	if err := ci.consensusEngine.Stop(); err != nil {
@@ -412,4 +433,9 @@ func (ci *ConsensusIntegration) GetTrustScores() map[string]float64 {
 // ConsensusEngine returns the underlying consensus engine
 func (ci *ConsensusIntegration) ConsensusEngine() *ConsensusEngine {
 	return ci.consensusEngine
+}
+
+// SyncManager returns the sync manager
+func (ci *ConsensusIntegration) SyncManager() *SyncManager {
+	return ci.syncManager
 }

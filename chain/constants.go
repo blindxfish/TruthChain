@@ -67,22 +67,11 @@ const (
 
 	// Mesh configuration
 	DefaultMeshPort = 9876
-	DefaultSyncPort = 9877
 	MaxMeshPeers    = 32
 
 	// API configuration
 	DefaultAPIPort = 8080
 	APITimeout     = 30 * time.Second
-
-	// Bitcoin-style sync configuration
-	SyncIntervalFast     = 30 * time.Second // Fast sync interval for active nodes
-	SyncIntervalNormal   = 60 * time.Second // Normal sync interval
-	SyncIntervalSlow     = 5 * time.Minute  // Slow sync interval for passive nodes
-	HeaderSyncTimeout    = 10 * time.Second // Timeout for header-only sync
-	BlockSyncTimeout     = 30 * time.Second // Timeout for full block sync
-	MaxHeadersPerRequest = 2000             // Maximum headers per sync request
-	MaxBlocksPerRequest  = 100              // Maximum blocks per sync request
-	ReorgThreshold       = 6                // Blocks needed for reorg confirmation
 )
 
 // Genesis Authority - Only this key can create the genesis block

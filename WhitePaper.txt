@@ -134,6 +134,19 @@ Beyond that, per-node reward decreases significantly, creating scarcity and valu
 - Pruned nodes (header-only)
 - IPFS/Arweave integration for snapshots (future)
 
+## 5.1 Decentralized Forkless Consensus
+
+TruthChain employs a novel, decentralized, forkless consensus protocol to ensure that no posts or burned characters are ever lost due to forks or chain reorganizations. This system replaces the legacy sync protocol and Bitcoin-style fork selection logic with a robust, trust-based, and collaborative approach:
+
+- **Post Gossip**: All new posts are gossiped throughout the mesh network, ensuring every node receives and stores pending posts before block creation.
+- **Block Proposal**: At each block height, a single node (the proposer) is selected based on trust scores to propose the next block. Only nodes with sufficient trust can propose.
+- **Voting**: Other nodes validate the proposal and cast votes. A block is finalized and added to the chain only after receiving enough votes from trusted peers.
+- **Trust Scores**: Each node maintains a dynamic trust score, increasing with good behavior (e.g., timely proposals, honest voting) and decreasing with misbehavior (e.g., invalid proposals, downtime). Trust scores determine eligibility to propose blocks and influence voting weight.
+- **Single Proposer, No Forks**: Only one block can be proposed and finalized at each height, eliminating the possibility of forks. If a proposal fails, a new proposer is selected.
+- **No Data Loss**: Because posts are gossiped and only finalized after network-wide agreement, no valid post or burned character is ever lost, even in the event of network partitions or node failures.
+
+This consensus system is fully decentralized, does not rely on proof-of-work or proof-of-stake, and is designed to maximize data integrity, censorship resistance, and network liveness. It is tightly integrated with the mesh network and trust engine, and supersedes all previous chain sync and fork selection mechanisms.
+
 ## 6. Character Transfer System
 
 ### Signed Transfers
@@ -197,11 +210,12 @@ Daily cap ensures chain size grows at a predictable rate:
 
 ## 10. Roadmap
 
-- **Phase 1**: CLI tool for node, wallet, posting, and sync ✅ **COMPLETE**
-- **Phase 2**: Peer discovery and full P2P sync ✅ **COMPLETE**
-- **Phase 3**: Web interface for viewing, searching, posting
-- **Phase 4**: Optional browser extension wallet
-- **Phase 5**: Governance, tipping, reputation systems
+- **Phase 1**: CLI tool for node, wallet, posting ✅ **COMPLETE**
+- **Phase 2**: Peer discovery and full P2P mesh network ✅ **COMPLETE**
+- **Phase 3**: Decentralized, forkless consensus protocol ✅ **COMPLETE**
+- **Phase 4**: Web interface for viewing, searching, posting
+- **Phase 5**: Optional browser extension wallet
+- **Phase 6**: Governance, tipping, reputation systems
 
 ### Current Implementation Status
 
@@ -214,7 +228,7 @@ Daily cap ensures chain size grows at a predictable rate:
 - **HTTP API**: Complete REST API for all operations
 - **Mesh Network**: P2P mesh with gossip protocol and trust scoring
 - **Beacon System**: Public discoverability with incentives
-- **Chain Synchronization**: TCP-based block sync protocol
+- **Decentralized, Forkless Consensus**: Trust-based block proposal, voting, and finalization with no forks or data loss
 - **Network Transport**: Complete TCP transport layer with mesh integration
 - **Storage Layer**: BoltDB persistence with full state management
 - **Bitcoin-Style Restart**: Persistent configuration and automatic data loading
