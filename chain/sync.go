@@ -26,6 +26,10 @@ type SyncManager struct {
 	// Sync state
 	syncStartTime time.Time
 	syncProgress  *SyncProgress
+
+	// Block request tracking
+	pendingBlockResponses map[int]chan *Block
+	responseTimeout       time.Duration
 }
 
 // SyncProgress tracks sync progress
@@ -58,10 +62,12 @@ type BlockResponse struct {
 // NewSyncManager creates a new sync manager
 func NewSyncManager(blockchain BlockchainInterface, nodeID string, config *ConsensusConfig) *SyncManager {
 	return &SyncManager{
-		blockchain: blockchain,
-		nodeID:     nodeID,
-		config:     config,
-		stopChan:   make(chan struct{}),
+		blockchain:            blockchain,
+		nodeID:                nodeID,
+		config:                config,
+		stopChan:              make(chan struct{}),
+		pendingBlockResponses: make(map[int]chan *Block),
+		responseTimeout:       30 * time.Second, // 30 second timeout for block requests
 	}
 }
 
@@ -103,6 +109,17 @@ func (sm *SyncManager) Stop() error {
 
 	sm.isRunning = false
 	close(sm.stopChan)
+
+	// Clear all pending block responses
+	for index, responseChan := range sm.pendingBlockResponses {
+		select {
+		case responseChan <- nil: // Send nil to unblock waiting requests
+		default:
+			// Channel might be full, just close it
+		}
+		close(responseChan)
+		delete(sm.pendingBlockResponses, index)
+	}
 
 	log.Printf("[SyncManager] Stopped sync manager for node %s", sm.nodeID)
 	return nil
@@ -235,8 +252,23 @@ func (sm *SyncManager) requestBlock(index int) (*Block, error) {
 		Index:     index,
 		NodeID:    sm.nodeID,
 		Timestamp: time.Now().Unix(),
-		Signature: "", // TODO: Add signature
+		Signature: "", // TODO: Add signature validation
 	}
+
+	// Create response channel
+	responseChan := make(chan *Block, 1)
+
+	// Register pending response
+	sm.mu.Lock()
+	sm.pendingBlockResponses[index] = responseChan
+	sm.mu.Unlock()
+
+	// Cleanup function to remove from pending map
+	defer func() {
+		sm.mu.Lock()
+		delete(sm.pendingBlockResponses, index)
+		sm.mu.Unlock()
+	}()
 
 	// Send request to network
 	if sm.onBlockRequest != nil {
@@ -245,14 +277,18 @@ func (sm *SyncManager) requestBlock(index int) (*Block, error) {
 		}
 	}
 
-	// TODO: Wait for response with timeout
-	// For now, return a placeholder
-	// In real implementation, this would:
-	// 1. Send request to multiple peers
-	// 2. Wait for responses with timeout
-	// 3. Return the first valid block received
-
-	return nil, fmt.Errorf("block request not yet implemented")
+	// Wait for response with timeout
+	select {
+	case block := <-responseChan:
+		if block == nil {
+			return nil, fmt.Errorf("received nil block for index %d", index)
+		}
+		return block, nil
+	case <-time.After(sm.responseTimeout):
+		return nil, fmt.Errorf("timeout waiting for block %d", index)
+	case <-sm.stopChan:
+		return nil, fmt.Errorf("sync interrupted while waiting for block %d", index)
+	}
 }
 
 // validateAndIntegrateBlock validates and integrates a received block
@@ -338,14 +374,22 @@ func (sm *SyncManager) HandleBlockResponse(response *BlockResponse) error {
 		return fmt.Errorf("block index mismatch in response")
 	}
 
-	// Process the block if we're currently syncing
-	sm.mu.RLock()
-	isSyncing := sm.isSyncing
-	sm.mu.RUnlock()
+	// Check if we have a pending request for this block
+	sm.mu.Lock()
+	responseChan, exists := sm.pendingBlockResponses[response.Index]
+	sm.mu.Unlock()
 
-	if isSyncing {
-		// TODO: Send block to sync process
-		log.Printf("[SyncManager] Received block %d from %s", response.Index, response.NodeID)
+	if exists {
+		// Send block to waiting request
+		select {
+		case responseChan <- response.Block:
+			log.Printf("[SyncManager] Delivered block %d to waiting request", response.Index)
+		default:
+			log.Printf("[SyncManager] Response channel full for block %d", response.Index)
+		}
+	} else {
+		// No pending request - this might be an unsolicited response
+		log.Printf("[SyncManager] Received unsolicited block %d from %s", response.Index, response.NodeID)
 	}
 
 	return nil
@@ -395,6 +439,10 @@ func (sm *SyncManager) GetSyncStatus() map[string]interface{} {
 			"start_time":     sm.syncProgress.StartTime,
 		}
 	}
+
+	// Add pending requests info
+	status["pending_requests"] = len(sm.pendingBlockResponses)
+	status["response_timeout"] = sm.responseTimeout.Seconds()
 
 	return status
 }

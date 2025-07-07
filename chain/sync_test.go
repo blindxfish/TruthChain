@@ -2,6 +2,7 @@ package chain
 
 import (
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 )
@@ -197,4 +198,81 @@ func TestSyncManagerGetSyncStatus(t *testing.T) {
 
 	// Stop
 	syncManager.Stop()
+}
+
+func TestSyncManagerRequestResponseFlow(t *testing.T) {
+	blockchain := NewMockBlockchain()
+	config := DefaultConsensusConfig()
+
+	syncManager := NewSyncManager(blockchain, "test-node", config)
+
+	// Start the sync manager
+	if err := syncManager.Start(); err != nil {
+		t.Fatalf("Failed to start sync manager: %v", err)
+	}
+	defer syncManager.Stop()
+
+	// Create a test block
+	testBlock := &Block{
+		Index:     1,
+		Hash:      "test-block-1",
+		PrevHash:  "genesis",
+		Timestamp: time.Now().Unix(),
+	}
+
+	// Start a goroutine to simulate a response
+	go func() {
+		time.Sleep(100 * time.Millisecond) // Simulate network delay
+		response := &BlockResponse{
+			Index:     1,
+			Block:     testBlock,
+			NodeID:    "peer-node",
+			Timestamp: time.Now().Unix(),
+		}
+		syncManager.HandleBlockResponse(response)
+	}()
+
+	// Request the block
+	block, err := syncManager.requestBlock(1)
+	if err != nil {
+		t.Fatalf("Failed to request block: %v", err)
+	}
+
+	if block == nil {
+		t.Fatal("Expected block, got nil")
+	}
+
+	if block.Hash != "test-block-1" {
+		t.Errorf("Expected hash 'test-block-1', got '%s'", block.Hash)
+	}
+
+	if block.Index != 1 {
+		t.Errorf("Expected index 1, got %d", block.Index)
+	}
+}
+
+func TestSyncManagerRequestTimeout(t *testing.T) {
+	blockchain := NewMockBlockchain()
+	config := DefaultConsensusConfig()
+
+	syncManager := NewSyncManager(blockchain, "test-node", config)
+
+	// Start the sync manager
+	if err := syncManager.Start(); err != nil {
+		t.Fatalf("Failed to start sync manager: %v", err)
+	}
+	defer syncManager.Stop()
+
+	// Request a block that won't be responded to
+	// This should timeout after 30 seconds, but we'll use a shorter timeout for testing
+	syncManager.responseTimeout = 100 * time.Millisecond
+
+	_, err := syncManager.requestBlock(999)
+	if err == nil {
+		t.Fatal("Expected timeout error, got nil")
+	}
+
+	if !strings.Contains(err.Error(), "timeout") {
+		t.Errorf("Expected timeout error, got: %v", err)
+	}
 }
