@@ -159,7 +159,13 @@ func (sm *SyncManager) CheckAndSyncIfNeeded() error {
 		return nil
 	}
 
-	// Step 4: Perform sync
+	// Step 4: Check if we have peers available for sync
+	if peerTip == 0 {
+		log.Printf("[SyncManager] No peers available for sync - will retry when peers connect")
+		return nil
+	}
+
+	// Step 5: Perform sync
 	log.Printf("[SyncManager] Starting sync: local tip %d, peer tip %d", myTip, peerTip)
 	return sm.performBlockSync(myTip+1, peerTip)
 }
@@ -175,12 +181,10 @@ func (sm *SyncManager) getMyChainTip() (int, error) {
 
 // queryPeerChainTips queries multiple peers for their latest block height
 func (sm *SyncManager) queryPeerChainTips() (int, error) {
-	// TODO: Implement peer querying
-	// For now, return a placeholder value
-	// In real implementation, this would:
-	// 1. Get list of connected peers
-	// 2. Send chain tip requests to multiple peers
-	// 3. Return the highest tip received
+	// For now, return 0 to indicate no peers available
+	// This prevents the node from trying to sync when no peers are connected
+	// TODO: Implement actual peer querying when mesh network is connected
+	log.Printf("[SyncManager] No peers available for chain tip query - returning 0")
 	return 0, nil
 }
 
@@ -397,7 +401,7 @@ func (sm *SyncManager) HandleBlockResponse(response *BlockResponse) error {
 
 // syncChecker periodically checks if the node needs to sync
 func (sm *SyncManager) syncChecker() {
-	ticker := time.NewTicker(10 * time.Second)
+	ticker := time.NewTicker(30 * time.Second) // Check every 30 seconds
 	defer ticker.Stop()
 
 	for {
@@ -417,6 +421,18 @@ func (sm *SyncManager) syncChecker() {
 			}
 		}
 	}
+}
+
+// NotifyPeersAvailable can be called when peers become available
+func (sm *SyncManager) NotifyPeersAvailable() {
+	log.Printf("[SyncManager] Peers became available - triggering sync check")
+
+	// Trigger an immediate sync check
+	go func() {
+		if err := sm.CheckAndSyncIfNeeded(); err != nil {
+			log.Printf("[SyncManager] Sync check failed after peer notification: %v", err)
+		}
+	}()
 }
 
 // GetSyncStatus returns the current sync status

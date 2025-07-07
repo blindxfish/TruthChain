@@ -276,3 +276,28 @@ func TestSyncManagerRequestTimeout(t *testing.T) {
 		t.Errorf("Expected timeout error, got: %v", err)
 	}
 }
+
+func TestSyncManagerNoPeersAvailable(t *testing.T) {
+	blockchain := NewMockBlockchain()
+	config := DefaultConsensusConfig()
+
+	syncManager := NewSyncManager(blockchain, "test-node", config)
+
+	// Start the sync manager
+	if err := syncManager.Start(); err != nil {
+		t.Fatalf("Failed to start sync manager: %v", err)
+	}
+	defer syncManager.Stop()
+
+	// Test CheckAndSyncIfNeeded when no peers are available
+	// This should not fail, just log that no peers are available
+	if err := syncManager.CheckAndSyncIfNeeded(); err != nil {
+		t.Fatalf("CheckAndSyncIfNeeded should not fail when no peers available: %v", err)
+	}
+
+	// Verify the sync manager is not stuck in syncing state
+	status := syncManager.GetSyncStatus()
+	if status["is_syncing"].(bool) {
+		t.Error("SyncManager should not be in syncing state when no peers available")
+	}
+}

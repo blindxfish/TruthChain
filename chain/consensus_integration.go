@@ -90,6 +90,8 @@ func (ci *ConsensusIntegration) Start() error {
 	if err := ci.syncManager.CheckAndSyncIfNeeded(); err != nil {
 		log.Printf("[ConsensusIntegration] Initial sync failed: %v", err)
 		// Continue anyway - sync will retry in background
+	} else {
+		log.Printf("[ConsensusIntegration] Initial sync check completed")
 	}
 
 	// Start sync manager

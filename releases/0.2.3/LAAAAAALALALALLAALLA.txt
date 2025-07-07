@@ -1,2 +1,0 @@
-$env:GOOS="linux"; $env:GOARCH="amd64"; go build -o releases/0.2.3/truthchain-linux cmd/main.go; $env:GOOS="windows"; $env:GOARCH="amd64"; go build -o releases/0.2.3/truthchain.exe cmd/main.go
-85.146.116.45
