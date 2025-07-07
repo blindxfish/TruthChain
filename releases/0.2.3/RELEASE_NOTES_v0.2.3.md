@@ -58,6 +58,11 @@
 - **New Port**: Make sure port 9877 is open for chain sync
 - **Existing Ports**: Ports 8080 (API) and 9876 (mesh) remain the same
 
+### Genesis Authority (Server Only)
+- **File**: `genesis-authority.json` must be in the working directory
+- **Purpose**: Only the server with this file can create the genesis block
+- **Result**: Other nodes will sync from the server's genesis block
+
 ### Log Files
 - **Location**: `logs/truthchain.log`
 - **Rotation**: Logs are appended to the existing file

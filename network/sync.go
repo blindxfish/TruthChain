@@ -405,8 +405,18 @@ func (msm *MeshSyncManager) isOwnAddress(peerAddr string) bool {
 	}
 
 	// Check if it's the mainnet domain (which is our own server)
+	// BUT only if we are the server (have genesis authority)
 	if strings.Contains(peerAddr, "mainnet.truth-chain.org") {
-		return true
+		// Check if we have genesis authority (meaning we are the server)
+		_, err := chain.ValidateGenesisAuthority()
+		if err == nil {
+			// We have genesis authority, so we are the server
+			// Don't sync from mainnet.truth-chain.org (ourselves)
+			return true
+		}
+		// We don't have genesis authority, so we are a client
+		// We SHOULD sync from mainnet.truth-chain.org (the server)
+		return false
 	}
 
 	// Check if the port matches our mesh port (additional check)

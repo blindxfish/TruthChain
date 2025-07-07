@@ -336,24 +336,115 @@ func (b *Block) ValidateBlockWithThreshold(postThreshold int) error {
 	// Enforce post count threshold rules
 	postCount := len(b.Posts)
 
-	// Block must have exactly the threshold number of posts (unless it's a forced block)
-	if postCount != postThreshold {
-		return fmt.Errorf("block %d has invalid post count: expected %d, got %d (fork protection)",
+	// Allow blocks with 0 posts (periodic/timer blocks) or exactly the threshold (event-driven blocks)
+	if postCount != 0 && postCount != postThreshold {
+		return fmt.Errorf("block %d has invalid post count: expected 0 or %d, got %d (fork protection)",
 			b.Index, postThreshold, postCount)
 	}
 
-	// Additional security: ensure posts are not empty
-	if postCount == 0 {
-		return fmt.Errorf("block %d has no posts (fork protection)", b.Index)
+	// Additional security: ensure posts are not empty if postCount > 0
+	if postCount > 0 {
+		for i, post := range b.Posts {
+			if post.Content == "" {
+				return fmt.Errorf("block %d has empty post at index %d (fork protection)", b.Index, i)
+			}
+			if post.Author == "" {
+				return fmt.Errorf("block %d has post without author at index %d (fork protection)", b.Index, i)
+			}
+		}
 	}
 
-	// Validate that all posts have valid content
+	return nil
+}
+
+// ValidateBlockRelaxed is like ValidateBlock but skips the state root block index check (for initial sync)
+func (b *Block) ValidateBlockRelaxed() error {
+	if b.Index < 0 {
+		return fmt.Errorf("block index cannot be negative")
+	}
+	if b.Timestamp <= 0 {
+		return fmt.Errorf("block timestamp must be positive")
+	}
+	if b.PrevHash == "" && b.Index != 0 {
+		return fmt.Errorf("genesis block must have empty prev_hash")
+	}
+	if b.PrevHash != "" && b.Index == 0 {
+		return fmt.Errorf("non-genesis block must have prev_hash")
+	}
+
+	// Validate all posts in the block
 	for i, post := range b.Posts {
-		if post.Content == "" {
-			return fmt.Errorf("block %d has empty post at index %d (fork protection)", b.Index, i)
+		if err := post.ValidatePost(); err != nil {
+			return fmt.Errorf("invalid post at index %d: %v", i, err)
 		}
-		if post.Author == "" {
-			return fmt.Errorf("block %d has post without author at index %d (fork protection)", b.Index, i)
+	}
+
+	// Validate all transfers in the block
+	for i, transfer := range b.Transfers {
+		if err := transfer.Validate(); err != nil {
+			return fmt.Errorf("invalid transfer at index %d: %v", i, err)
+		}
+	}
+
+	// Validate state root if present, but skip block index check
+	if b.StateRoot != nil {
+		// SKIP: if b.StateRoot.BlockIndex != b.Index { ... }
+		// Only check state root hash
+		calculatedHash := b.StateRoot.CalculateHash()
+		if b.StateRoot.Hash != calculatedHash {
+			return fmt.Errorf("state root hash mismatch: expected %s, got %s", calculatedHash, b.StateRoot.Hash)
+		}
+	}
+
+	// Validate beacon announcement if present
+	if b.BeaconAnnounce != nil {
+		if err := b.BeaconAnnounce.ValidateBeaconAnnounce(); err != nil {
+			return fmt.Errorf("invalid beacon announcement: %w", err)
+		}
+	}
+
+	// Validate character count
+	calculatedCharCount := 0
+	for _, post := range b.Posts {
+		calculatedCharCount += post.GetCharacterCount()
+	}
+	if calculatedCharCount != b.CharCount {
+		return fmt.Errorf("block char_count mismatch: expected %d, got %d", calculatedCharCount, b.CharCount)
+	}
+
+	return nil
+}
+
+// ValidateBlockWithThresholdRelaxed is like ValidateBlockWithThreshold but skips the state root block index check (for initial sync)
+func (b *Block) ValidateBlockWithThresholdRelaxed(postThreshold int) error {
+	// First run relaxed validation
+	if err := b.ValidateBlockRelaxed(); err != nil {
+		return err
+	}
+
+	// Genesis block is always valid (no posts)
+	if b.Index == 0 {
+		return nil
+	}
+
+	// Enforce post count threshold rules
+	postCount := len(b.Posts)
+
+	// Allow blocks with 0 posts (periodic/timer blocks) or exactly the threshold (event-driven blocks)
+	if postCount != 0 && postCount != postThreshold {
+		return fmt.Errorf("block %d has invalid post count: expected 0 or %d, got %d (fork protection)",
+			b.Index, postThreshold, postCount)
+	}
+
+	// Additional security: ensure posts are not empty if postCount > 0
+	if postCount > 0 {
+		for i, post := range b.Posts {
+			if post.Content == "" {
+				return fmt.Errorf("block %d has empty post at index %d (fork protection)", b.Index, i)
+			}
+			if post.Author == "" {
+				return fmt.Errorf("block %d has post without author at index %d (fork protection)", b.Index, i)
+			}
 		}
 	}
 

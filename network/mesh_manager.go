@@ -543,3 +543,64 @@ func (mm *MeshManager) ReceiveNetworkMessage(data []byte) error {
 	mm.network.MessageChan <- msg
 	return nil
 }
+
+// BroadcastMessage sends a message to all mesh peers
+func (mm *MeshManager) BroadcastMessage(message []byte) error {
+	return mm.SendToMesh(message)
+}
+
+// SendMessageToPeer sends a message to a specific mesh peer
+func (mm *MeshManager) SendMessageToPeer(peerID string, message []byte) error {
+	mm.mu.RLock()
+	conn, exists := mm.connections[peerID]
+	mm.mu.RUnlock()
+	if !exists || conn.Conn == nil {
+		return fmt.Errorf("peer %s not connected", peerID)
+	}
+	_, err := conn.Conn.Write(message)
+	return err
+}
+
+// GetStats returns mesh manager statistics
+func (mm *MeshManager) GetStats() map[string]interface{} {
+	mm.mu.RLock()
+	defer mm.mu.RUnlock()
+	return map[string]interface{}{
+		"connection_count": len(mm.connections),
+		"target_count":     mm.targetCount,
+	}
+}
+
+// GetActivePeers returns the list of connected peer addresses
+func (mm *MeshManager) GetActivePeers() []string {
+	mm.mu.RLock()
+	defer mm.mu.RUnlock()
+	peers := make([]string, 0, len(mm.connections))
+	for addr, conn := range mm.connections {
+		if conn.IsConnected {
+			peers = append(peers, addr)
+		}
+	}
+	return peers
+}
+
+// GetPeerCount returns the number of connected peers
+func (mm *MeshManager) GetPeerCount() int {
+	mm.mu.RLock()
+	defer mm.mu.RUnlock()
+	count := 0
+	for _, conn := range mm.connections {
+		if conn.IsConnected {
+			count++
+		}
+	}
+	return count
+}
+
+// IsPeerConnected checks if a peer is connected
+func (mm *MeshManager) IsPeerConnected(peerID string) bool {
+	mm.mu.RLock()
+	defer mm.mu.RUnlock()
+	conn, exists := mm.connections[peerID]
+	return exists && conn.IsConnected
+}

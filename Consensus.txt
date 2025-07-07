@@ -1,0 +1,170 @@
+✅ TruthChain Block Creation Protocol — Final Design Prompt
+📜 Implement a forkless block creation system for TruthChain where:
+
+All posts are distributed (gossiped) before inclusion.
+
+Only one node can create a block at a time.
+
+A voting mechanism approves the block creator.
+
+The post mempool is cleaned once included in a block.
+
+Trust scores influence proposal rights.
+
+No posts are ever lost or duplicated.
+
+🧩 SYSTEM COMPONENTS TO IMPLEMENT
+Post structure
+
+PostGossip protocol
+
+BlockProposal protocol
+
+BlockVote collection and approval
+
+TrustScore engine
+
+BlockMempool per node
+
+BlockBuilder logic (select 5 posts)
+
+ProposalTimeout mechanism
+
+MempoolCleanup after block acceptance
+
+🔁 FULL WORKFLOW — STEP-BY-STEP
+1. 📝 Post Creation & Gossip
+A user creates a post (burns characters).
+
+The node builds a Post{Author, Content, Timestamp, Signature}.
+
+The post is gossiped to all peers.
+
+All receiving nodes:
+
+Validate signature.
+
+Store post in local PendingPostPool.
+
+2. 📦 Mempool Growth & Block Readiness
+Each node tracks its PendingPostPool.
+
+When a node accumulates ≥ 5 valid posts, it becomes eligible to propose a block.
+
+3. 🗳️ Block Proposal & Voting
+The node builds a BlockProposal{Index, ProposerID, PostHashes[], Timestamp, Signature}.
+
+It gossips the proposal.
+
+All nodes:
+
+Validate block index.
+
+Validate proposer trust score ≥ 0.5.
+
+Check no other proposal is pending for that height.
+
+If valid, each node sends back a signed BlockVote{Index, ProposerID, VoterID, Signature}.
+
+4. 🔐 Proposal Approval
+If the proposer receives votes from all online peers (or a defined quorum):
+
+The proposal is locked for that block height.
+
+No other proposals are accepted for that height.
+
+A Reservation object is created:
+
+go
+Copy
+Edit
+BlockReservation{
+  Index: 42,
+  Proposer: "NodeA",
+  ApprovedBy: [NodeB, NodeC, NodeD],
+  TimeoutAt: now + 5 minutes
+}
+5. ⏱️ Block Creation Window
+The approved proposer has 5 minutes to broadcast the full block.
+
+If they succeed:
+
+Block is validated and accepted.
+
+Block is added to the chain.
+
+All included posts are removed from local mempools.
+
+Proposer’s trust score increases (e.g., +0.01).
+
+6. ❌ Timeout / Failure
+If proposer fails to submit the block in time:
+
+All nodes run a sync() check at TimeoutAt.
+
+If block still missing:
+
+The reservation is discarded.
+
+A ProposalExpired{Index, ProposerID} message is gossiped.
+
+Proposer’s trust score decreases by -0.1.
+
+If trust score drops below 0.5, node is blocked from proposing further blocks until recovered via uptime.
+
+New proposals for the same block index are now allowed.
+
+7. 🧹 Mempool Cleanup
+After a valid block is accepted:
+
+For each PostHash in block.Posts, remove it from PendingPostPool.
+
+8. 🔐 Trust Score Engine
+Each node has a trust score in [0.0 – 1.0].
+
+Trust score:
+
+Increases over time with uptime (+0.01/hour or configurable).
+
+Increases when proposer succeeds.
+
+Decreases on failed proposals.
+
+Nodes with trust < 0.5 can’t propose, but can vote and sync.
+
+💡 ADDITIONAL DETAILS
+Post ordering in the block should follow Post.Timestamp ASC or Post.Hash ASC to avoid manipulation.
+
+All posts are signed and cryptographically verified.
+
+Block proposals and votes are signed and validated on receipt.
+
+No duplicate posts are allowed in any block.
+
+✅ EXPECTED MODULES
+post.go: Post struct, validation, gossip
+
+mempool.go: In-memory pending post pool
+
+proposal.go: BlockProposal, vote handling, timeouts
+
+trust.go: Trust score manager
+
+blockbuilder.go: Builds new block from 5 valid posts
+
+sync.go: Sync logic for recovery and expired slots
+
+blockchain.go: Final insertion, validation, and post removal
+
+✅ Summary
+This system ensures:
+
+No forks
+
+No lost posts
+
+One block per height
+
+Every post is eventually placed
+
+Proposers are held accountable

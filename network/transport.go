@@ -14,17 +14,25 @@ import (
 
 // StartSyncServer starts a TCP server to handle chain sync requests
 func StartSyncServer(bindAddr string, bc *blockchain.Blockchain, nodeID string) error {
+	fmt.Printf("[SyncServer] Attempting to bind to %s...\n", bindAddr)
 	ln, err := net.Listen("tcp", bindAddr)
 	if err != nil {
+		fmt.Printf("[SyncServer] ERROR: Failed to bind to %s: %v\n", bindAddr, err)
 		return fmt.Errorf("failed to start sync server: %w", err)
 	}
-	fmt.Printf("[SyncServer] Listening on %s\n", bindAddr)
+	fmt.Printf("[SyncServer] SUCCESS: Listening on %s\n", bindAddr)
+	fmt.Printf("[SyncServer] Ready to accept sync connections on %s\n", bindAddr)
+	defer func() {
+		fmt.Printf("[SyncServer] Shutting down sync server on %s\n", bindAddr)
+		ln.Close()
+	}()
 	for {
 		conn, err := ln.Accept()
 		if err != nil {
 			fmt.Printf("[SyncServer] Accept error: %v\n", err)
 			continue
 		}
+		fmt.Printf("[SyncServer] Accepted connection from %s\n", conn.RemoteAddr())
 		go handleSyncConnection(conn, bc, nodeID)
 	}
 }

@@ -26,6 +26,9 @@ type Blockchain struct {
 	mu            sync.RWMutex        `json:"-"`
 }
 
+// Ensure Blockchain implements chain.BlockchainInterface
+var _ chain.BlockchainInterface = (*Blockchain)(nil)
+
 // NewBlockchain creates a new blockchain with persistent storage
 func NewBlockchain(storage store.Storage, postThreshold int, networkID string) (*Blockchain, error) {
 	// Validate mainnet rules if using mainnet
@@ -345,6 +348,12 @@ func (bc *Blockchain) createBlockFromPending() error {
 		newStateRoot,
 	)
 
+	log.Printf("[BlockCreate] Creating new block #%d", newBlock.Index)
+	log.Printf("[BlockCreate] PrevHash: %s", newBlock.PrevHash)
+	log.Printf("[BlockCreate] Posts: %d, Transfers: %d", len(newBlock.Posts), len(newBlock.Transfers))
+	log.Printf("[BlockCreate] StateRoot: %s (BlockIndex: %d)", newBlock.StateRoot.Hash, newBlock.StateRoot.BlockIndex)
+	log.Printf("[BlockCreate] CharCount: %d", newBlock.CharCount)
+
 	// Validate the new block with post threshold rules
 	if err := newBlock.ValidateBlockWithThreshold(bc.PostThreshold); err != nil {
 		return fmt.Errorf("invalid block: %w", err)
@@ -365,6 +374,8 @@ func (bc *Blockchain) createBlockFromPending() error {
 
 	// Clear pending posts
 	bc.PendingPosts = []chain.Post{}
+
+	log.Printf("[BlockCreate] Block #%d created and saved successfully", newBlock.Index)
 
 	return nil
 }
@@ -805,6 +816,10 @@ func (bc *Blockchain) IntegrateBlocksFromSync(blocks []*chain.Block) (int, int, 
 	blocksAdded := 0
 	blocksSkipped := 0
 
+	// Check if this is an initial sync (no local blocks)
+	chainLength, err := bc.GetChainLength()
+	isInitialSync := (err == nil && chainLength == 0)
+
 	for _, block := range blocks {
 		// Check if we already have this block
 		existingBlock, err := bc.storage.GetBlock(block.Index)
@@ -816,8 +831,14 @@ func (bc *Blockchain) IntegrateBlocksFromSync(blocks []*chain.Block) (int, int, 
 		}
 
 		// Validate block
-		if err := block.ValidateBlockWithThreshold(bc.PostThreshold); err != nil {
-			return blocksAdded, blocksSkipped, fmt.Errorf("invalid block %d: %w", block.Index, err)
+		if isInitialSync {
+			if err := block.ValidateBlockWithThresholdRelaxed(bc.PostThreshold); err != nil {
+				return blocksAdded, blocksSkipped, fmt.Errorf("invalid block %d: %w", block.Index, err)
+			}
+		} else {
+			if err := block.ValidateBlockWithThreshold(bc.PostThreshold); err != nil {
+				return blocksAdded, blocksSkipped, fmt.Errorf("invalid block %d: %w", block.Index, err)
+			}
 		}
 
 		// Check block index continuity
@@ -956,19 +977,27 @@ func (bc *Blockchain) createTimeBasedBlock() error {
 		return fmt.Errorf("failed to get latest block: %w", err)
 	}
 
+	// Calculate new state root for the new block index
+	newStateRoot := bc.stateManager.CalculateStateRoot(latestBlock.Index + 1)
+
 	// Create a new empty block for mining rewards
 	newBlock := &chain.Block{
 		Index:     latestBlock.Index + 1,
 		Timestamp: time.Now().Unix(),
 		PrevHash:  latestBlock.Hash,
-		Posts:     []chain.Post{},        // Empty block - no posts
-		Transfers: []chain.Transfer{},    // No transfers
-		StateRoot: latestBlock.StateRoot, // Keep same state root since no changes
-		CharCount: 0,                     // No characters in empty block
+		Posts:     []chain.Post{},     // Empty block - no posts
+		Transfers: []chain.Transfer{}, // No transfers
+		StateRoot: newStateRoot,       // Use new state root with correct block index
+		CharCount: 0,                  // No characters in empty block
 	}
 
 	// Calculate and set block hash
 	newBlock.SetHash()
+
+	log.Printf("[BlockCreate] Creating time-based block #%d", newBlock.Index)
+	log.Printf("[BlockCreate] PrevHash: %s", newBlock.PrevHash)
+	log.Printf("[BlockCreate] StateRoot: %s (BlockIndex: %d)", newBlock.StateRoot.Hash, newBlock.StateRoot.BlockIndex)
+	log.Printf("[BlockCreate] CharCount: %d", newBlock.CharCount)
 
 	// Save the block
 	if err := bc.storage.SaveBlock(newBlock); err != nil {
@@ -978,7 +1007,8 @@ func (bc *Blockchain) createTimeBasedBlock() error {
 	// Update last block time
 	bc.lastBlockTime = time.Now()
 
-	fmt.Printf("Created time-based block %d (empty block for mining rewards)\n", newBlock.Index)
+	log.Printf("[BlockCreate] Time-based block #%d created and saved successfully", newBlock.Index)
+
 	return nil
 }
 
@@ -992,4 +1022,9 @@ func (bc *Blockchain) timeBasedBlockLoop() {
 		}
 		time.Sleep(1 * time.Minute) // Check every minute
 	}
+}
+
+// SaveBlock saves a block to storage
+func (bc *Blockchain) SaveBlock(block *chain.Block) error {
+	return bc.storage.SaveBlock(block)
 }
