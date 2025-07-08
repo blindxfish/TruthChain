@@ -21,6 +21,9 @@ type ConsensusEngine struct {
 	onBlockCreated    func(*Block) error
 	onProposalExpired func(*ProposalExpired) error
 
+	// Block index provider
+	blockIndexProvider func() int
+
 	// State
 	nodeID    string
 	isRunning bool
@@ -344,12 +347,18 @@ func (ce *ConsensusEngine) validateVote(vote *BlockVote) error {
 	return nil
 }
 
-// getNextBlockIndex gets the next block index (simplified - in real implementation,
-// this would query the blockchain)
+// getNextBlockIndex gets the next block index
 func (ce *ConsensusEngine) getNextBlockIndex() int {
-	// This is a simplified implementation
-	// In a real system, you'd query the blockchain for the latest block index
-	return 0 // TODO: Implement proper block index tracking
+	if ce.blockIndexProvider != nil {
+		return ce.blockIndexProvider()
+	}
+	// Fallback: return 0 if no provider is set
+	return 0
+}
+
+// SetBlockIndexProvider sets a function to get the next block index
+func (ce *ConsensusEngine) SetBlockIndexProvider(provider func() int) {
+	ce.blockIndexProvider = provider
 }
 
 // Background workers
@@ -467,4 +476,16 @@ func (ce *ConsensusEngine) GetStats() map[string]interface{} {
 		"min_trust_score":          ce.config.MinTrustScore,
 		"proposal_timeout_minutes": ce.config.ProposalTimeout.Minutes(),
 	}
+}
+
+// HandleProposalExpired handles an expired proposal from another node
+func (ce *ConsensusEngine) HandleProposalExpired(expired *ProposalExpired) error {
+	// Remove the reservation
+	ce.proposalManager.RemoveReservation(expired.Index)
+
+	// Decrease trust score for failed proposer
+	ce.trustManager.OnProposalFailure(expired.ProposerID)
+
+	log.Printf("[Consensus] Handled expired proposal for block %d from %s", expired.Index, expired.ProposerID)
+	return nil
 }

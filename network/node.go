@@ -30,6 +30,9 @@ type TrustNetwork struct {
 	MeshManager      *MeshManager      // Mesh connection management
 	BootstrapManager *BootstrapManager // Bootstrap node management
 
+	// Consensus integration
+	ConsensusMessageHandler func([]byte, string) error // Handler for consensus messages
+
 	// Configuration
 	ListenPort    int
 	MaxPeers      int
@@ -71,6 +74,7 @@ const (
 	MessageTypeBlock
 	MessageTypePing
 	MessageTypePong
+	MessageTypeConsensus
 )
 
 // PeerEvent represents peer-related events
@@ -227,6 +231,17 @@ func (tn *TrustNetwork) AddPeer(address string) (*MeshPeer, error) {
 	}
 	log.Printf("Added peer: %s (Trust: %.2f)", address, p.TrustScore)
 	return peer, nil
+}
+
+// NotifySyncManagerPeersAvailable notifies the sync manager that peers are available
+func (tn *TrustNetwork) NotifySyncManagerPeersAvailable() {
+	// This will be called when peers become available
+	// For now, we'll implement this later when we have a direct reference to the sync manager
+}
+
+// SetConsensusMessageHandler sets the handler for consensus messages
+func (tn *TrustNetwork) SetConsensusMessageHandler(handler func([]byte, string) error) {
+	tn.ConsensusMessageHandler = handler
 }
 
 // RemovePeer removes a peer from the mesh and topology
@@ -435,6 +450,8 @@ func (tn *TrustNetwork) handleMessage(msg NetworkMessage) {
 		tn.handlePingMessage(msg)
 	case MessageTypePong:
 		tn.handlePongMessage(msg)
+	case MessageTypeConsensus:
+		tn.handleConsensusMessage(msg)
 	default:
 		log.Printf("Unknown message type: %d", msg.Type)
 	}
@@ -541,6 +558,24 @@ func (tn *TrustNetwork) handlePingMessage(msg NetworkMessage) {
 func (tn *TrustNetwork) handlePongMessage(msg NetworkMessage) {
 	// Update peer latency (implementation will be added)
 	log.Printf("Received pong from %s", msg.Source)
+}
+
+// handleConsensusMessage processes consensus messages
+func (tn *TrustNetwork) handleConsensusMessage(msg NetworkMessage) {
+	// Route consensus message to the consensus handler
+	if tn.ConsensusMessageHandler != nil {
+		payload, ok := msg.Payload.([]byte)
+		if !ok {
+			log.Printf("Invalid consensus message payload type")
+			return
+		}
+
+		if err := tn.ConsensusMessageHandler(payload, msg.Source); err != nil {
+			log.Printf("Failed to handle consensus message: %v", err)
+		}
+	} else {
+		log.Printf("No consensus message handler registered")
+	}
 }
 
 // trustUpdater periodically updates trust scores

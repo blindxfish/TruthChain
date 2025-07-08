@@ -72,6 +72,18 @@ func NewConsensusIntegration(
 		ci.handleProposalExpiredOutbound,
 	)
 
+	// Set up block index provider
+	consensusEngine.SetBlockIndexProvider(func() int {
+		latestBlock, err := ci.blockchain.GetLatestBlock()
+		if err != nil {
+			return 0
+		}
+		return latestBlock.Index + 1
+	})
+
+	// Set up peer query provider (will be set later when network is available)
+	// This will be set in the main.go when the network is initialized
+
 	return ci
 }
 
@@ -253,33 +265,27 @@ func (ci *ConsensusIntegration) reservationMonitor() {
 
 // checkTimeBasedBlock checks if a time-based block should be created
 func (ci *ConsensusIntegration) checkTimeBasedBlock() {
-	if !ci.blockBuilder.ShouldCreateTimeBasedBlock() {
-		return
-	}
+	// DISABLED: Time-based blocks should go through consensus protocol
+	// This method is disabled to ensure all blocks follow the proper consensus flow:
+	// 1. Post gossip
+	// 2. Block proposal with post hashes
+	// 3. Voting and approval
+	// 4. Block creation only after approval
 
-	// Get current blockchain state
-	latestBlock, err := ci.blockchain.GetLatestBlock()
-	if err != nil {
-		log.Printf("[ConsensusIntegration] Failed to get latest block: %v", err)
-		return
-	}
+	// Instead of creating blocks directly, we should:
+	// 1. Check if we have enough posts to propose a block
+	// 2. If yes, propose a block through consensus
+	// 3. If no, wait for more posts or let other nodes propose
 
-	// Check if we have any pending posts
-	if ci.consensusEngine.mempool.GetPostCount() > 0 {
-		// Posts are available, let consensus handle it
-		return
+	postCount := ci.consensusEngine.mempool.GetPostCount()
+	if postCount >= ci.config.PostThreshold {
+		log.Printf("[ConsensusIntegration] Have %d posts (threshold: %d) - should propose block through consensus",
+			postCount, ci.config.PostThreshold)
+		// TODO: Trigger block proposal through consensus engine
+	} else {
+		log.Printf("[ConsensusIntegration] Only have %d posts (need %d) - waiting for more posts",
+			postCount, ci.config.PostThreshold)
 	}
-
-	// Create time-based block
-	nextIndex := latestBlock.Index + 1
-	block, err := ci.blockBuilder.BuildTimeBasedBlock(nextIndex, latestBlock.Hash, latestBlock.StateRoot)
-	if err != nil {
-		log.Printf("[ConsensusIntegration] Failed to build time-based block: %v", err)
-		return
-	}
-
-	// Process the block
-	ci.blockChan <- block
 }
 
 // checkReservations checks for approved reservations and creates blocks
@@ -291,6 +297,35 @@ func (ci *ConsensusIntegration) checkReservations() {
 		if reservation.Proposer == ci.nodeID {
 			ci.processOurReservation(reservation)
 		}
+
+		// Check for expired reservations
+		if time.Now().After(reservation.TimeoutAt) {
+			ci.handleExpiredReservation(reservation)
+		}
+	}
+}
+
+// handleExpiredReservation handles an expired block reservation
+func (ci *ConsensusIntegration) handleExpiredReservation(reservation *BlockReservation) {
+	log.Printf("[ConsensusIntegration] Block %d reservation expired for proposer %s",
+		reservation.Index, reservation.Proposer)
+
+	// Decrease trust score for failed proposer
+	ci.consensusEngine.trustManager.OnProposalFailure(reservation.Proposer)
+
+	// Remove the reservation
+	ci.consensusEngine.proposalManager.RemoveReservation(reservation.Index)
+
+	// Broadcast proposal expired message
+	expiredMsg := &ProposalExpired{
+		Index:      reservation.Index,
+		ProposerID: reservation.Proposer,
+		Timestamp:  time.Now().Unix(),
+		Signature:  "", // TODO: Sign the message
+	}
+
+	if err := ci.handleProposalExpiredOutbound(expiredMsg); err != nil {
+		log.Printf("[ConsensusIntegration] Failed to broadcast expired message: %v", err)
 	}
 }
 
@@ -299,6 +334,11 @@ func (ci *ConsensusIntegration) processOurReservation(reservation *BlockReservat
 	// Get current blockchain state
 	latestBlock, err := ci.blockchain.GetLatestBlock()
 	if err != nil {
+		// Check if this is because there are no blocks yet
+		if err.Error() == "no blocks found" {
+			log.Printf("[ConsensusIntegration] No blocks found yet - cannot process reservation for block %d", reservation.Index)
+			return
+		}
 		log.Printf("[ConsensusIntegration] Failed to get latest block: %v", err)
 		return
 	}
@@ -307,6 +347,13 @@ func (ci *ConsensusIntegration) processOurReservation(reservation *BlockReservat
 	if latestBlock.Index+1 != reservation.Index {
 		log.Printf("[ConsensusIntegration] Block index mismatch: expected %d, got %d",
 			latestBlock.Index+1, reservation.Index)
+		return
+	}
+
+	// Check if reservation is still valid
+	if time.Now().After(reservation.TimeoutAt) {
+		log.Printf("[ConsensusIntegration] Our reservation for block %d has expired", reservation.Index)
+		ci.handleExpiredReservation(reservation)
 		return
 	}
 
@@ -333,16 +380,35 @@ func (ci *ConsensusIntegration) processBlock(block *Block) error {
 		log.Printf("[ConsensusIntegration] Failed to broadcast block: %v", err)
 	}
 
+	// Handle mempool cleanup and trust score updates
+	ci.handleBlockAccepted(block)
+
+	return nil
+}
+
+// handleBlockAccepted handles a block that was accepted into the blockchain
+func (ci *ConsensusIntegration) handleBlockAccepted(block *Block) {
+	// Remove posts from mempool (this is done in consensus engine)
+	ci.consensusEngine.HandleBlockCreated(block)
+
 	// Increase trust score if we created the block
 	if block.Index > 0 { // Skip genesis block
 		latestBlock, err := ci.blockchain.GetLatestBlock()
-		if err == nil && latestBlock.Hash == block.Hash {
+		if err != nil {
+			// Ignore "no blocks found" error as it might happen during startup
+			if err.Error() != "no blocks found" {
+				log.Printf("[ConsensusIntegration] Failed to get latest block for trust score update: %v", err)
+			}
+			return
+		}
+		if latestBlock.Hash == block.Hash {
 			// We successfully created this block
 			ci.consensusEngine.trustManager.OnProposalSuccess(ci.nodeID)
+			log.Printf("[ConsensusIntegration] Successfully created block %d, trust score increased", block.Index)
 		}
 	}
 
-	return nil
+	log.Printf("[ConsensusIntegration] Block %d accepted with %d posts", block.Index, len(block.Posts))
 }
 
 // validateAndIntegrateBlock validates and integrates a block into the blockchain
@@ -440,4 +506,39 @@ func (ci *ConsensusIntegration) ConsensusEngine() *ConsensusEngine {
 // SyncManager returns the sync manager
 func (ci *ConsensusIntegration) SyncManager() *SyncManager {
 	return ci.syncManager
+}
+
+// SetPeerQueryProvider sets the peer query provider for the sync manager
+func (ci *ConsensusIntegration) SetPeerQueryProvider(provider func() ([]string, error)) {
+	ci.syncManager.SetPeerQueryProvider(provider)
+}
+
+// SetSyncNetworkCallbacks sets the network callbacks for the sync manager
+func (ci *ConsensusIntegration) SetSyncNetworkCallbacks(
+	onBlockRequest func(*BlockRequest) error,
+	onBlockResponse func(*BlockResponse) error,
+	onChainTipQuery func(*ChainTipQuery) error,
+	onChainTipResponse func(*ChainTipResponse) error,
+) {
+	ci.syncManager.SetNetworkCallbacks(onBlockRequest, onBlockResponse, onChainTipQuery, onChainTipResponse)
+}
+
+// HandleBlockRequest handles an incoming block request from the network
+func (ci *ConsensusIntegration) HandleBlockRequest(request *BlockRequest) error {
+	return ci.syncManager.HandleBlockRequest(request)
+}
+
+// HandleBlockResponse handles an incoming block response from the network
+func (ci *ConsensusIntegration) HandleBlockResponse(response *BlockResponse) error {
+	return ci.syncManager.HandleBlockResponse(response)
+}
+
+// HandleChainTipQuery handles an incoming chain tip query from the network
+func (ci *ConsensusIntegration) HandleChainTipQuery(query *ChainTipQuery) error {
+	return ci.syncManager.HandleChainTipQuery(query)
+}
+
+// HandleChainTipResponse handles an incoming chain tip response from the network
+func (ci *ConsensusIntegration) HandleChainTipResponse(response *ChainTipResponse) error {
+	return ci.syncManager.HandleChainTipResponse(response)
 }

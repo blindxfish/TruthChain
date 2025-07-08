@@ -247,6 +247,11 @@ func (api *APIServer) handleInfo(w http.ResponseWriter, r *http.Request) {
 func (api *APIServer) handleLatestBlock(w http.ResponseWriter, r *http.Request) {
 	block, err := api.blockchain.GetLatestBlock()
 	if err != nil {
+		// Check if this is because there are no blocks yet
+		if err.Error() == "no blocks found" {
+			api.sendError(w, "No blocks found yet", http.StatusNotFound)
+			return
+		}
 		api.sendError(w, "Failed to get latest block", http.StatusInternalServerError)
 		return
 	}

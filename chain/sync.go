@@ -14,8 +14,13 @@ type SyncManager struct {
 	config     *ConsensusConfig
 
 	// Network callbacks
-	onBlockRequest  func(*BlockRequest) error
-	onBlockResponse func(*BlockResponse) error
+	onBlockRequest     func(*BlockRequest) error
+	onBlockResponse    func(*BlockResponse) error
+	onChainTipQuery    func(*ChainTipQuery) error
+	onChainTipResponse func(*ChainTipResponse) error
+
+	// Peer query interface
+	peerQueryProvider func() ([]string, error) // Returns list of connected peer addresses
 
 	// State
 	isRunning bool
@@ -30,6 +35,10 @@ type SyncManager struct {
 	// Block request tracking
 	pendingBlockResponses map[int]chan *Block
 	responseTimeout       time.Duration
+
+	// Chain tip query tracking
+	pendingChainTipResponses map[string]chan *ChainTipResponse
+	chainTipQueryTimeout     time.Duration
 }
 
 // SyncProgress tracks sync progress
@@ -59,15 +68,32 @@ type BlockResponse struct {
 	Signature string `json:"signature"` // TODO: Add signature validation
 }
 
+// ChainTipQuery represents a query for a peer's latest block height
+type ChainTipQuery struct {
+	NodeID    string `json:"node_id"`
+	Timestamp int64  `json:"timestamp"`
+	Signature string `json:"signature"` // TODO: Add signature validation
+}
+
+// ChainTipResponse represents a response to a chain tip query
+type ChainTipResponse struct {
+	NodeID    string `json:"node_id"`
+	ChainTip  int    `json:"chain_tip"`
+	Timestamp int64  `json:"timestamp"`
+	Signature string `json:"signature"` // TODO: Add signature validation
+}
+
 // NewSyncManager creates a new sync manager
 func NewSyncManager(blockchain BlockchainInterface, nodeID string, config *ConsensusConfig) *SyncManager {
 	return &SyncManager{
-		blockchain:            blockchain,
-		nodeID:                nodeID,
-		config:                config,
-		stopChan:              make(chan struct{}),
-		pendingBlockResponses: make(map[int]chan *Block),
-		responseTimeout:       30 * time.Second, // 30 second timeout for block requests
+		blockchain:               blockchain,
+		nodeID:                   nodeID,
+		config:                   config,
+		stopChan:                 make(chan struct{}),
+		pendingBlockResponses:    make(map[int]chan *Block),
+		responseTimeout:          30 * time.Second, // 30 second timeout for block requests
+		pendingChainTipResponses: make(map[string]chan *ChainTipResponse),
+		chainTipQueryTimeout:     10 * time.Second, // 10 second timeout for chain tip queries
 	}
 }
 
@@ -75,9 +101,18 @@ func NewSyncManager(blockchain BlockchainInterface, nodeID string, config *Conse
 func (sm *SyncManager) SetNetworkCallbacks(
 	onBlockRequest func(*BlockRequest) error,
 	onBlockResponse func(*BlockResponse) error,
+	onChainTipQuery func(*ChainTipQuery) error,
+	onChainTipResponse func(*ChainTipResponse) error,
 ) {
 	sm.onBlockRequest = onBlockRequest
 	sm.onBlockResponse = onBlockResponse
+	sm.onChainTipQuery = onChainTipQuery
+	sm.onChainTipResponse = onChainTipResponse
+}
+
+// SetPeerQueryProvider sets the function to query connected peers
+func (sm *SyncManager) SetPeerQueryProvider(provider func() ([]string, error)) {
+	sm.peerQueryProvider = provider
 }
 
 // Start starts the sync manager
@@ -176,16 +211,113 @@ func (sm *SyncManager) getMyChainTip() (int, error) {
 	if err != nil {
 		return -1, fmt.Errorf("failed to get chain length: %w", err)
 	}
-	return chainLength - 1, nil // Convert length to index
+	chainTip := chainLength - 1 // Convert length to index
+	log.Printf("[SyncManager] Chain length: %d, calculated chain tip: %d", chainLength, chainTip)
+	return chainTip, nil
 }
 
 // queryPeerChainTips queries multiple peers for their latest block height
 func (sm *SyncManager) queryPeerChainTips() (int, error) {
-	// For now, return 0 to indicate no peers available
-	// This prevents the node from trying to sync when no peers are connected
-	// TODO: Implement actual peer querying when mesh network is connected
-	log.Printf("[SyncManager] No peers available for chain tip query - returning 0")
-	return 0, nil
+	// Check if we have a peer query provider
+	if sm.peerQueryProvider == nil {
+		log.Printf("[SyncManager] No peer query provider available - returning 0")
+		return 0, nil
+	}
+
+	// Get connected peers
+	peers, err := sm.peerQueryProvider()
+	if err != nil {
+		log.Printf("[SyncManager] Failed to get peers: %v", err)
+		return 0, nil
+	}
+
+	if len(peers) == 0 {
+		log.Printf("[SyncManager] No connected peers available for chain tip query - returning 0")
+		return 0, nil
+	}
+
+	log.Printf("[SyncManager] Querying %d peers for chain tips", len(peers))
+
+	// Query each peer for their chain tip
+	responses := make(chan *ChainTipResponse, len(peers))
+	queryID := fmt.Sprintf("tip_query_%d", time.Now().UnixNano())
+
+	// Create response channel for this query
+	sm.mu.Lock()
+	sm.pendingChainTipResponses[queryID] = responses
+	sm.mu.Unlock()
+
+	// Cleanup function
+	defer func() {
+		sm.mu.Lock()
+		delete(sm.pendingChainTipResponses, queryID)
+		sm.mu.Unlock()
+		close(responses)
+	}()
+
+	// Send chain tip queries to all peers
+	query := &ChainTipQuery{
+		NodeID:    sm.nodeID,
+		Timestamp: time.Now().Unix(),
+		Signature: "", // TODO: Add signature
+	}
+
+	if sm.onChainTipQuery != nil {
+		if err := sm.onChainTipQuery(query); err != nil {
+			log.Printf("[SyncManager] Network not ready for chain tip query (will retry): %v", err)
+		}
+	} else {
+		log.Printf("[SyncManager] Chain tip query callback not set up yet (will retry)")
+	}
+
+	// Wait for responses with timeout
+	highestTip := -1
+	responseCount := 0
+
+	timeout := time.After(sm.chainTipQueryTimeout)
+
+	for {
+		select {
+		case response := <-responses:
+			if response != nil {
+				responseCount++
+				if response.ChainTip > highestTip {
+					highestTip = response.ChainTip
+				}
+				log.Printf("[SyncManager] Received chain tip response: %d from %s (count: %d)",
+					response.ChainTip, response.NodeID, responseCount)
+
+				// If we've received responses from most peers, we can proceed
+				if responseCount >= len(peers)/2 {
+					log.Printf("[SyncManager] Received responses from %d/%d peers, highest tip: %d",
+						responseCount, len(peers), highestTip)
+					return highestTip, nil
+				}
+			}
+		case <-timeout:
+			if responseCount > 0 {
+				log.Printf("[SyncManager] Timeout reached, received %d responses, highest tip: %d",
+					responseCount, highestTip)
+				return highestTip, nil
+			}
+			log.Printf("[SyncManager] Timeout waiting for chain tip responses")
+			break
+		case <-sm.stopChan:
+			return 0, fmt.Errorf("sync interrupted during chain tip query")
+		}
+	}
+
+	// If no responses received, return conservative estimate
+	myTip, err := sm.getMyChainTip()
+	if err != nil {
+		log.Printf("[SyncManager] Failed to get own chain tip: %v", err)
+		return 0, nil
+	}
+
+	// Assume peers might be ahead by 1 block (conservative estimate)
+	estimatedPeerTip := myTip + 1
+	log.Printf("[SyncManager] No chain tip responses, using estimate: %d (my tip: %d)", estimatedPeerTip, myTip)
+	return estimatedPeerTip, nil
 }
 
 // performBlockSync performs the actual block synchronization
@@ -200,6 +332,9 @@ func (sm *SyncManager) performBlockSync(fromIndex, toIndex int) error {
 	log.Printf("[SyncManager] Starting block sync from %d to %d", fromIndex, toIndex)
 
 	// Step 2: Block fetch loop
+	maxRetries := 3
+	retryDelay := 1 * time.Second
+
 	for sm.syncProgress.CurrentIndex <= toIndex {
 		select {
 		case <-sm.stopChan:
@@ -208,18 +343,31 @@ func (sm *SyncManager) performBlockSync(fromIndex, toIndex int) error {
 			// Continue sync
 		}
 
-		// Request block
-		block, err := sm.requestBlock(sm.syncProgress.CurrentIndex)
-		if err != nil {
-			sm.syncProgress.BlocksFailed++
-			log.Printf("[SyncManager] Failed to fetch block %d: %v", sm.syncProgress.CurrentIndex, err)
+		// Request block with retries
+		var block *Block
+		var err error
+		retries := 0
 
-			// Retry logic
-			if sm.syncProgress.BlocksFailed > 3 {
-				return fmt.Errorf("too many failed block requests")
+		for retries < maxRetries {
+			block, err = sm.requestBlock(sm.syncProgress.CurrentIndex)
+			if err == nil {
+				break // Success
 			}
-			time.Sleep(1 * time.Second)
-			continue
+
+			retries++
+			sm.syncProgress.BlocksFailed++
+			log.Printf("[SyncManager] Failed to fetch block %d (attempt %d/%d): %v",
+				sm.syncProgress.CurrentIndex, retries, maxRetries, err)
+
+			if retries < maxRetries {
+				time.Sleep(retryDelay)
+				retryDelay *= 2 // Exponential backoff
+			}
+		}
+
+		if err != nil {
+			return fmt.Errorf("failed to fetch block %d after %d attempts: %w",
+				sm.syncProgress.CurrentIndex, maxRetries, err)
 		}
 
 		// Step 3: Validation and integration
@@ -279,6 +427,8 @@ func (sm *SyncManager) requestBlock(index int) (*Block, error) {
 		if err := sm.onBlockRequest(request); err != nil {
 			return nil, fmt.Errorf("failed to send block request: %w", err)
 		}
+	} else {
+		return nil, fmt.Errorf("block request callback not set up yet (will retry)")
 	}
 
 	// Wait for response with timeout
@@ -399,6 +549,61 @@ func (sm *SyncManager) HandleBlockResponse(response *BlockResponse) error {
 	return nil
 }
 
+// HandleChainTipQuery handles an incoming chain tip query from another node
+func (sm *SyncManager) HandleChainTipQuery(query *ChainTipQuery) error {
+	// Get our current chain tip
+	chainTip, err := sm.getMyChainTip()
+	if err != nil {
+		return fmt.Errorf("failed to get chain tip: %w", err)
+	}
+
+	// Create response
+	response := &ChainTipResponse{
+		NodeID:    sm.nodeID,
+		ChainTip:  chainTip,
+		Timestamp: time.Now().Unix(),
+		Signature: "", // TODO: Add signature
+	}
+
+	// Send response to network
+	if sm.onChainTipResponse != nil {
+		if err := sm.onChainTipResponse(response); err != nil {
+			return fmt.Errorf("failed to send chain tip response: %w", err)
+		}
+	}
+
+	log.Printf("[SyncManager] Sent chain tip %d to %s (node: %s)", chainTip, query.NodeID, sm.nodeID)
+	return nil
+}
+
+// HandleChainTipResponse handles an incoming chain tip response from another node
+func (sm *SyncManager) HandleChainTipResponse(response *ChainTipResponse) error {
+	// Validate response
+	if response.ChainTip < 0 {
+		return fmt.Errorf("invalid chain tip in response: %d", response.ChainTip)
+	}
+
+	// Check if we have any pending chain tip queries
+	sm.mu.Lock()
+	defer sm.mu.Unlock()
+
+	// Find the first pending query and send the response
+	for queryID, responseChan := range sm.pendingChainTipResponses {
+		select {
+		case responseChan <- response:
+			log.Printf("[SyncManager] Delivered chain tip %d to waiting query %s", response.ChainTip, queryID)
+			return nil
+		default:
+			// Channel full, try next one
+			continue
+		}
+	}
+
+	// No pending queries - this might be an unsolicited response
+	log.Printf("[SyncManager] Received unsolicited chain tip %d from %s", response.ChainTip, response.NodeID)
+	return nil
+}
+
 // syncChecker periodically checks if the node needs to sync
 func (sm *SyncManager) syncChecker() {
 	ticker := time.NewTicker(30 * time.Second) // Check every 30 seconds
@@ -446,19 +651,40 @@ func (sm *SyncManager) GetSyncStatus() map[string]interface{} {
 	}
 
 	if sm.syncProgress != nil {
+		// Calculate progress percentage
+		totalBlocks := sm.syncProgress.TargetIndex - sm.syncProgress.StartIndex + 1
+		progressPercent := 0.0
+		if totalBlocks > 0 {
+			progressPercent = float64(sm.syncProgress.BlocksFetched) / float64(totalBlocks) * 100
+		}
+
+		// Calculate duration
+		duration := time.Since(sm.syncProgress.StartTime)
+
+		// Calculate rate
+		blocksPerSecond := 0.0
+		if duration.Seconds() > 0 {
+			blocksPerSecond = float64(sm.syncProgress.BlocksFetched) / duration.Seconds()
+		}
+
 		status["sync_progress"] = map[string]interface{}{
-			"start_index":    sm.syncProgress.StartIndex,
-			"target_index":   sm.syncProgress.TargetIndex,
-			"current_index":  sm.syncProgress.CurrentIndex,
-			"blocks_fetched": sm.syncProgress.BlocksFetched,
-			"blocks_failed":  sm.syncProgress.BlocksFailed,
-			"start_time":     sm.syncProgress.StartTime,
+			"start_index":       sm.syncProgress.StartIndex,
+			"target_index":      sm.syncProgress.TargetIndex,
+			"current_index":     sm.syncProgress.CurrentIndex,
+			"blocks_fetched":    sm.syncProgress.BlocksFetched,
+			"blocks_failed":     sm.syncProgress.BlocksFailed,
+			"progress_percent":  progressPercent,
+			"blocks_per_second": blocksPerSecond,
+			"duration":          duration.String(),
+			"start_time":        sm.syncProgress.StartTime,
 		}
 	}
 
 	// Add pending requests info
-	status["pending_requests"] = len(sm.pendingBlockResponses)
+	status["pending_block_requests"] = len(sm.pendingBlockResponses)
+	status["pending_chain_tip_queries"] = len(sm.pendingChainTipResponses)
 	status["response_timeout"] = sm.responseTimeout.Seconds()
+	status["chain_tip_query_timeout"] = sm.chainTipQueryTimeout.Seconds()
 
 	return status
 }

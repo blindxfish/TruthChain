@@ -150,7 +150,7 @@ func saveConfig(config *NodeConfig) error {
 	return nil
 }
 
-const VERSION = "v0.2.3"
+const VERSION = "v0.2.4"
 
 func main() {
 	// Initialize dual logging: both console and file
@@ -733,6 +733,28 @@ func NewTruthChainNode(config *NodeConfig) (*TruthChainNode, error) {
 	node.consensusIntegration = consensusIntegration
 	node.consensusNetwork = consensusNetwork
 
+	// Set up peer query provider for sync manager
+	consensusIntegration.SetPeerQueryProvider(func() ([]string, error) {
+		if trustNet.PeerTable == nil {
+			return []string{}, nil
+		}
+		peers := trustNet.PeerTable.GetConnectedPeers()
+		addresses := make([]string, len(peers))
+		for i, peer := range peers {
+			addresses[i] = peer.Address
+		}
+		return addresses, nil
+	})
+
+	// Store references for later setup after network is started
+	node.consensusIntegration = consensusIntegration
+	node.consensusNetwork = consensusNetwork
+
+	// Set up consensus message routing from TrustNetwork to ConsensusNetwork
+	trustNet.SetConsensusMessageHandler(func(messageData []byte, sourcePeer string) error {
+		return consensusNetwork.HandleIncomingMessage(messageData, sourcePeer)
+	})
+
 	// Initialize network components if enabled
 	if config.MeshMode {
 		if err := node.initializeMesh(); err != nil {
@@ -846,8 +868,67 @@ func (n *TruthChainNode) setupAPIRoutes() {
 	n.router.HandleFunc("/network/stats", n.handleNetworkStats).Methods("GET")
 	n.router.HandleFunc("/network/peers", n.handleGetPeers).Methods("GET")
 
+	// Sync endpoints
+	n.router.HandleFunc("/sync/status", n.handleSyncStatus).Methods("GET")
+
 	// Add CORS headers
 	n.router.Use(n.corsMiddleware)
+}
+
+// setupSyncCallbacks sets up the sync manager network callbacks after network is started
+func (n *TruthChainNode) setupSyncCallbacks() {
+	if n.consensusIntegration == nil || n.consensusNetwork == nil {
+		log.Printf("Warning: Consensus components not available for sync callback setup")
+		return
+	}
+
+	// Update the consensus network's mesh manager reference
+	if n.trustNetwork != nil && n.trustNetwork.MeshManager != nil {
+		n.consensusNetwork.SetMeshManager(n.trustNetwork.MeshManager)
+	} else {
+		log.Printf("Warning: Mesh manager not available for consensus network")
+		return
+	}
+
+	// Set up sync manager network callbacks
+	n.consensusIntegration.SetSyncNetworkCallbacks(
+		// Block request callback - sends requests to the consensus network
+		func(request *chain.BlockRequest) error {
+			return n.consensusNetwork.BroadcastMessage(network.MessageTypeBlockRequest, request)
+		},
+		// Block response callback - sends responses to the consensus network
+		func(response *chain.BlockResponse) error {
+			return n.consensusNetwork.BroadcastMessage(network.MessageTypeBlockResponse, response)
+		},
+		// Chain tip query callback - sends queries to the consensus network
+		func(query *chain.ChainTipQuery) error {
+			return n.consensusNetwork.BroadcastMessage(network.MessageTypeChainTipQuery, query)
+		},
+		// Chain tip response callback - sends responses to the consensus network
+		func(response *chain.ChainTipResponse) error {
+			return n.consensusNetwork.BroadcastMessage(network.MessageTypeChainTipResponse, response)
+		},
+	)
+
+	log.Printf("Sync manager network callbacks configured")
+}
+
+// handleSyncStatus returns the current sync status
+func (n *TruthChainNode) handleSyncStatus(w http.ResponseWriter, r *http.Request) {
+	if n.consensusIntegration == nil {
+		http.Error(w, "Consensus integration not available", http.StatusServiceUnavailable)
+		return
+	}
+
+	syncStatus := n.consensusIntegration.SyncManager().GetSyncStatus()
+
+	response := map[string]interface{}{
+		"sync_status": syncStatus,
+		"timestamp":   time.Now().Unix(),
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(response)
 }
 
 // Start begins the TruthChain node
@@ -880,6 +961,9 @@ func (n *TruthChainNode) Start() error {
 	if err := n.startNetworkComponents(); err != nil {
 		return fmt.Errorf("failed to start network components: %w", err)
 	}
+
+	// Set up sync manager network callbacks after network is started
+	n.setupSyncCallbacks()
 
 	// Start API server if enabled
 	if n.config.APIMode {
@@ -1028,6 +1112,11 @@ func (n *TruthChainNode) handleInfo(w http.ResponseWriter, r *http.Request) {
 func (n *TruthChainNode) handleLatestBlock(w http.ResponseWriter, r *http.Request) {
 	block, err := n.blockchain.GetLatestBlock()
 	if err != nil {
+		// Check if this is because there are no blocks yet
+		if err.Error() == "no blocks found" {
+			http.Error(w, "No blocks found yet", http.StatusNotFound)
+			return
+		}
 		http.Error(w, "Failed to get latest block", http.StatusInternalServerError)
 		return
 	}

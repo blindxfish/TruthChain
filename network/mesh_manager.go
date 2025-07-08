@@ -321,9 +321,22 @@ func (mm *MeshManager) processReceivedData(address string, data []byte) {
 
 	// Check if it looks like JSON (starts with { or [)
 	if len(dataStr) > 0 && (dataStr[0] == '{' || dataStr[0] == '[') {
-		// Try to decode as NetworkMessage
+		// Try to decode as NetworkMessage first
 		if err := mm.ReceiveNetworkMessage(data); err != nil {
-			log.Printf("Failed to decode JSON mesh message from %s: %v", address, err)
+			// If it's not a NetworkMessage, it might be a consensus message
+			// Check if it has a "type" field (consensus messages have this)
+			if strings.Contains(dataStr, `"type"`) {
+				// Route to consensus handler if available
+				if mm.network.ConsensusMessageHandler != nil {
+					if err := mm.network.ConsensusMessageHandler(data, address); err != nil {
+						log.Printf("Failed to handle consensus message from %s: %v", address, err)
+					}
+				} else {
+					log.Printf("Received consensus message but no handler registered")
+				}
+			} else {
+				log.Printf("Failed to decode JSON mesh message from %s: %v", address, err)
+			}
 		}
 	} else {
 		// Unknown protocol - log but don't spam

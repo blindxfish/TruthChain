@@ -306,6 +306,10 @@ func (bc *Blockchain) createBlockFromPending() error {
 	// Get the latest block from storage
 	latestBlock, err := bc.storage.GetLatestBlock()
 	if err != nil {
+		// Check if this is because there are no blocks yet
+		if err.Error() == "no blocks found" {
+			return fmt.Errorf("no blocks found yet - cannot create block from pending posts")
+		}
 		return fmt.Errorf("failed to get latest block: %w", err)
 	}
 
@@ -492,6 +496,25 @@ func (bc *Blockchain) GetBlockchainInfo() (map[string]interface{}, error) {
 
 	latestBlock, err := bc.storage.GetLatestBlock()
 	if err != nil {
+		// Check if this is because there are no blocks yet
+		if err.Error() == "no blocks found" {
+			// Return info for empty blockchain
+			info := map[string]interface{}{
+				"chain_length":            0,
+				"total_character_count":   0,
+				"total_post_count":        0,
+				"pending_post_count":      len(bc.PendingPosts),
+				"pending_character_count": bc.GetPendingCharacterCount(),
+				"post_threshold":          bc.PostThreshold,
+				"latest_block_index":      -1,
+				"latest_block_hash":       "",
+				"latest_block_timestamp":  0,
+				"wallet_count":            bc.stateManager.GetWalletCount(),
+				"total_character_supply":  bc.stateManager.GetTotalCharacterSupply(),
+				"status":                  "no_blocks",
+			}
+			return info, nil
+		}
 		return nil, fmt.Errorf("failed to get latest block: %w", err)
 	}
 
@@ -974,6 +997,10 @@ func (bc *Blockchain) createTimeBasedBlock() error {
 	// Get the latest block
 	latestBlock, err := bc.storage.GetLatestBlock()
 	if err != nil {
+		// Check if this is because there are no blocks yet
+		if err.Error() == "no blocks found" {
+			return fmt.Errorf("no blocks found yet - cannot create time-based block")
+		}
 		return fmt.Errorf("failed to get latest block: %w", err)
 	}
 
@@ -1014,13 +1041,13 @@ func (bc *Blockchain) createTimeBasedBlock() error {
 
 // timeBasedBlockLoop is a background goroutine to check for time-based blocks and create them
 func (bc *Blockchain) timeBasedBlockLoop() {
+	// DISABLED: Time-based blocks should go through consensus protocol
+	// This method is disabled to ensure all blocks follow the proper consensus flow
+	log.Printf("[Blockchain] Time-based block creation disabled - blocks must go through consensus protocol")
+
+	// Sleep indefinitely to prevent any time-based block creation
 	for {
-		if bc.shouldCreateTimeBasedBlock() {
-			if err := bc.createTimeBasedBlock(); err != nil {
-				fmt.Printf("Error creating time-based block: %v\n", err)
-			}
-		}
-		time.Sleep(1 * time.Minute) // Check every minute
+		time.Sleep(1 * time.Hour) // Check every hour but do nothing
 	}
 }
 

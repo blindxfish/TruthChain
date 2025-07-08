@@ -33,12 +33,21 @@ In a world where political figures, corporations, and media entities frequently 
 
 ## 🚀 Quick Start
 
-### Decentralized Consensus Setup (v0.3.0 - Forkless Consensus)
-TruthChain v0.3.0 features **decentralized, forkless consensus** ensuring no posts or burned characters are ever lost:
+### Prerequisites
+- Go 1.19 or higher
+- Windows, Linux, or macOS
 
+### Installation & Setup
 ```bash
-# Download and run TruthChain
-./TruthChain.exe
+# Clone the repository
+git clone https://github.com/blindxfish/truthchain.git
+cd truthchain
+
+# Build the application
+go build -o truthchain_server cmd/main.go
+
+# Run TruthChain (interactive setup)
+./truthchain_server
 
 # First time: Interactive setup guides you through:
 # 1. Create or import a wallet
@@ -47,171 +56,90 @@ TruthChain v0.3.0 features **decentralized, forkless consensus** ensuring no pos
 # 4. Configure ports and settings
 # 5. Join the decentralized consensus network
 # 6. Configuration automatically saved for future starts
-
-# Subsequent runs: App joins consensus and loads existing data
-# No setup required - just works with decentralized consensus!
 ```
 
-### 🛡️ New Consensus Features (v0.3.0)
-- **Forkless Consensus**: No posts or burned characters are ever lost
-- **Decentralized Block Creation**: Single proposer per block with voting
-- **Trust-Based Proposer Selection**: Nodes with higher trust scores can propose
-- **Post Gossip Protocol**: Posts spread across the network before block creation
-- **Block Proposal & Voting**: Consensus through proposal submission and voting
-- **Trust Score Management**: Dynamic trust scores based on node behavior
+## 🏗️ Current Implementation Status
 
-### What You'll Get
-- ✅ **Bitcoin-Style Restart**: No crashes, loads existing data automatically
-- ✅ **Persistent Configuration**: Settings saved to `truthchain-config.json`
-- ✅ **Self-Connection Detection**: No duplicate peer counting or self-pinging
-- ✅ **Wallet Creation/Import**: Create new wallet or import existing one
-- ✅ **Network Selection**: Choose between Mainnet, Testnet, or Local
-- ✅ **Node Modes**: Enable API, Mesh, Beacon, and Mining features
-- ✅ **Port Configuration**: Simple port setup for network communication
-- ✅ **Wallet Info File**: Comprehensive wallet information with security warnings
-- ✅ **Mainnet Compatibility**: Fixed consensus rules for network compatibility
+### ✅ **IMPLEMENTED & WORKING**
 
-### Wallet Management
-- **New Wallet**: Automatically created and saved to `wallet.json`
-- **Import Wallet**: Import existing wallet using private key
-- **Wallet Info**: `YourWalletInfo.txt` file with security instructions
-- **Backup/Restore**: Complete wallet backup and restore functionality
-
-## 🏗️ Technical Architecture
-
-### Core Components
+#### Core Infrastructure
 - **Wallet System**: ECDSA key generation, signing, storage with Base58Check addresses
 - **Block & Post Logic**: Hash, sign, and verify methods with secure signature recovery
 - **Transfer System**: Signed character transfers with validation and state management
 - **Local Storage**: BoltDB for persistent data with mempool persistence
-- **Uptime Tracker**: Character reward distribution with 80% uptime requirement
-- **HTTP API**: Local interface for frontends
+- **HTTP API**: Local interface for frontends with comprehensive endpoints
 - **State Manager**: Wallet states, balances, and nonce tracking
+
+#### Network Layer
 - **Mesh Network**: Peer-to-peer communication and block synchronization
 - **Beacon System**: Network discovery and public node announcements
+- **Trust-based Peer Management**: Dynamic peer scoring and connection management
+- **Block Synchronization**: Cross-node block sharing and validation
 
-### Security Model
-- All posts and transfers signed with ECDSA private keys
-- Public key recovery from compact signatures ensures authorship validation
-- Local API only (127.0.0.1) - no exposed network ports by default
-- Frontends act as display + signing tools
-- Node is the source of truth
-- Fork protection with hardcoded mainnet rules
-- Wallet files with proper permissions (600)
+#### Consensus System
+- **Post Gossip Protocol**: Network-wide post distribution before block creation
+- **Block Proposal & Voting**: Consensus through proposal submission and voting
+- **Trust-based Proposer Selection**: Nodes with higher trust scores can propose blocks
+- **Dynamic Trust Score Management**: Trust scores based on node behavior
+- **Forkless Consensus**: No posts or burned characters are ever lost
 
-## 📊 Economic Model
+#### User Experience
+- **Interactive Setup Wizard**: Guided configuration for new users
+- **Network Selection**: Mainnet, Testnet, or Local network modes
+- **Node Mode Configuration**: API, Mesh, Beacon, and Mining modes
+- **Wallet Management**: Create, import, backup, and restore wallets
+- **Bitcoin-style Restart**: No crashes, loads existing data automatically
 
-### Node Rewards
-Nodes earn characters based on uptime, not proof-of-work. Character issuance decreases logarithmically as node count grows:
+### 🔄 **IN PROGRESS / PARTIALLY IMPLEMENTED**
 
-| Nodes Online | Characters per Node/day | Total Characters Emitted |
-|--------------|-------------------------|--------------------------|
-| 1            | 1,120                   | 1,120                    |
-| 10           | 1,037                   | 10,370                   |
-| 100          | 800                     | 80,000                   |
-| 500          | 451                     | 225,500                  |
-| 1,000        | 280                     | 280,000 (hard cap)       |
-| 10,000       | ~27                     | 280,000                  |
-| 100,000      | ~2.7                    | 280,000                  |
+#### Consensus Protocol
+- **Block Creation Flow**: The consensus protocol is implemented but time-based blocks were bypassing it (now fixed)
+- **Post Threshold Enforcement**: System needs more posts to trigger proper consensus flow
+- **Trust Score Integration**: Trust scores exist but need better integration with block proposal logic
 
-### Uptime Requirements
-- **80% uptime over 24 hours** required to receive rewards
-- Rewards distributed every 10 minutes when requirements are met
-- Heartbeats logged every hour for uptime tracking
+#### Sync System
+- **Block Synchronization**: Basic sync exists but needs debugging for proper chain tip reporting
+- **Peer Discovery**: Working but could be more robust
+- **Network Resilience**: Basic fault tolerance implemented
 
-### Transfer Economy
-- **Gas Fee**: 1 character per transfer (fixed)
-- **Transfer Cost**: Amount + 1 character gas fee
-- **Nonce System**: Prevents replay attacks and ensures transaction ordering
-- **State Management**: Real-time balance tracking with pending transaction consideration
+### ❌ **NOT YET IMPLEMENTED**
 
-### Incentive Structure
-- Characters become scarcer and more valuable over time
-- Users must run a node or obtain characters from others to post
-- Early adoption is rewarded with higher daily earnings
-- Transfer fees provide network sustainability
-- **Beacon nodes receive +50% character reward** for acting as public entry points and increasing network stability
+#### Production Readiness
+- **Live Network**: The blockchain is not live yet - currently in development/testing phase
+- **Genesis Block**: No genesis block has been created for mainnet
+- **Network Bootstrapping**: No public mainnet nodes are running yet
+- **Production Consensus**: Consensus rules need finalization and testing
 
-## 🚀 Implementation Roadmap
+#### Advanced Features
+- **Frontend Applications**: No web or mobile interfaces yet
+- **Block Explorer**: No public block explorer for viewing the blockchain
+- **Advanced API Features**: Some API endpoints are placeholder implementations
+- **Performance Optimization**: System needs optimization for high transaction volumes
+- **Security Audits**: No formal security audits have been conducted
 
-### Milestone 1: Init & Wallet ✅ **COMPLETE**
-- ✅ Generate and save ECDSA wallet (secp256k1)
-- ✅ CLI: show wallet address (public key)
-- ✅ Load or create wallet on node start
-- ✅ **Bonus**: Base58Check addresses, multi-network support, metadata
-- ✅ **NEW**: Interactive wallet creation and import functionality
-- ✅ **NEW**: Comprehensive wallet info file generation
-
-### Milestone 2: Block & Post Logic ✅ **COMPLETE**
-- ✅ Define Post and Block structs
-- ✅ Implement hash, sign, and verify methods
-- ✅ Collect valid posts in memory
-- ✅ Commit block when N posts are accumulated (configurable threshold)
-- ✅ **Secure signature verification with public key recovery**
-- ✅ **Bonus**: Post count thresholds, automatic mempool discharge, fork protection
-- ✅ **NEW**: Fixed consensus rules for mainnet compatibility
-
-### Milestone 3: Local Storage (BoltDB) ✅ **COMPLETE**
-- ✅ Save/load blocks with persistent storage
-- ✅ Save posts by hash with duplicate detection
-- ✅ Track current block index and chain length
-- ✅ Track pending posts in mempool with persistence
-- ✅ **Bonus**: Mempool discharge, post count thresholds, fork protection
-
-### Milestone 4: Uptime Tracker ✅ **COMPLETE**
-- ✅ Node logs uptime (heartbeats)
-- ✅ Every 10 minutes share the calculated amount of the characters among all active nodes based on the reward table.
-- ✅ Reward characters to the wallet
-- ✅ Live monitoring dashboard with `--monitor` flag
-- ✅ **Beacon Incentive**: Nodes running in beacon mode receive **+50% character reward** per interval as an incentive for public discoverability and network stability.
-- ✅ **NEW**: 80% uptime requirement with clear messaging
-
-### Milestone 5: Local HTTP API ✅ **COMPLETE**
-- ✅ RESTful API endpoints for all node operations
-- ✅ JSON responses with proper error handling
-- ✅ **Wallet backup/restore via API** for frontend integration
-- ✅ **Secure wallet backup download** with proper headers
-
-### Milestone 6: Network Layer ✅ **COMPLETE**
-- ✅ Mesh network for peer-to-peer communication
-- ✅ Beacon system for network discovery
-- ✅ Trust-based peer management
-- ✅ Block synchronization across nodes
-
-### Milestone 8: Decentralized Consensus ✅ **COMPLETE**
-- ✅ Forkless consensus system with no data loss
-- ✅ Post gossip protocol for network-wide post distribution
-- ✅ Block proposal and voting mechanism
-- ✅ Trust-based proposer selection
-- ✅ Dynamic trust score management
-- ✅ Single proposer per block with voting consensus
-- ✅ Integration with existing mesh network
-
-### Milestone 7: User Experience ✅ **COMPLETE**
-- ✅ Bitcoin-style restart system
-- ✅ Self-connection detection
-- ✅ Interactive setup wizard
-- ✅ Network selection (Mainnet/Testnet/Local)
-- ✅ Node mode configuration
-- ✅ Port configuration
-- ✅ Wallet import/creation
-- ✅ Comprehensive documentation
+#### Economic Model
+- **Uptime Mining**: Character reward system is implemented but not active on mainnet
+- **Transfer Economy**: Transfer system works but no active economy yet
+- **Incentive Mechanisms**: Beacon rewards and uptime requirements exist but not active
 
 ## 🌐 Network Modes
 
-### Mainnet (Production)
+### Mainnet (Production) - **NOT LIVE YET**
+- **Status**: Development complete, awaiting launch
 - **Post Threshold**: 5 posts per block
 - **Network ID**: `truthchain-mainnet`
 - **Consensus Rules**: Fixed for compatibility
-- **Use Case**: Production environment
+- **Use Case**: Production environment (when launched)
 
 ### Testnet (Development)
+- **Status**: Available for testing
 - **Post Threshold**: 3 posts per block
 - **Network ID**: `truthchain-testnet`
 - **Consensus Rules**: Relaxed for testing
 - **Use Case**: Development and testing
 
 ### Local (Isolated)
+- **Status**: Fully functional
 - **Post Threshold**: 2 posts per block
 - **Network ID**: `truthchain-local`
 - **Consensus Rules**: Minimal for local testing
@@ -219,71 +147,108 @@ Nodes earn characters based on uptime, not proof-of-work. Character issuance dec
 
 ## 🔧 Node Modes
 
-### API Mode
+### API Mode ✅ **WORKING**
 - **Purpose**: HTTP API server for frontend integration
 - **Port**: 8080 (default)
-- **Features**: Post creation, balance checking, transfers
-- **Required**: For web interfaces and external tools
+- **Features**: Post creation, balance checking, transfers, wallet management
+- **Status**: Fully implemented and functional
 
-### Mesh Mode
+### Mesh Mode ✅ **WORKING**
 - **Purpose**: Peer-to-peer network communication and consensus
 - **Port**: 9876 (default)
 - **Features**: Block sync, post propagation, peer discovery, consensus voting
-- **Required**: For network participation and consensus
+- **Status**: Fully implemented and functional
 
-### Beacon Mode
+### Beacon Mode ✅ **WORKING**
 - **Purpose**: Network discovery and public announcements
 - **Requirements**: Public IP and domain
-- **Features**: +50% character reward bonus
-- **Use Case**: Public entry points for the network
+- **Features**: +50% character reward bonus (when mainnet is live)
+- **Status**: Implemented but not active on mainnet
 
-### Mining Mode
+### Mining Mode ✅ **WORKING**
 - **Purpose**: Uptime-based character mining
 - **Requirements**: 80% uptime over 24 hours
 - **Features**: Automatic character rewards every 10 minutes
-- **Use Case**: Earning characters for posting
+- **Status**: Implemented but not active on mainnet
 
 ## 📡 API Reference
 
-**Start the node with API server:**
-```bash
-# Interactive setup (recommended)
-./TruthChain.exe
-
-# Or command line
-./TruthChain.exe --api-port 8080
-```
-
 **Available API Endpoints:**
 
-| Method | Endpoint | Description | Example |
+| Method | Endpoint | Description | Status |
 |--------|----------|-------------|---------|
-| `GET` | `/status` | Node and blockchain status | `curl http://127.0.0.1:8080/status` |
-| `GET` | `/health` | Health check | `curl http://127.0.0.1:8080/health` |
-| `GET` | `/info` | Node information | `curl http://127.0.0.1:8080/info` |
-| `GET` | `/wallets/{address}` | Wallet information | `curl http://127.0.0.1:8080/wallets/1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa` |
-| `GET` | `/wallets/{address}/balance` | Wallet balance | `curl http://127.0.0.1:8080/wallets/1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa/balance` |
-| `GET` | `/wallets/{address}/backup` | Download wallet backup | `curl http://127.0.0.1:8080/wallets/1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa/backup` |
-| `POST` | `/posts` | Create a new post | `curl -X POST -H "Content-Type: application/json" -d '{"content":"Hello TruthChain!"}' http://127.0.0.1:8080/posts` |
-| `GET` | `/posts/pending` | Get pending posts | `curl http://127.0.0.1:8080/posts/pending` |
-| `POST` | `/transfers` | Send characters | `curl -X POST -H "Content-Type: application/json" -d '{"to":"1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa","amount":100}' http://127.0.0.1:8080/transfers` |
-| `GET` | `/transfers/pending` | Get pending transfers | `curl http://127.0.0.1:8080/transfers/pending` |
-| `GET` | `/blockchain/latest` | Latest block | `curl http://127.0.0.1:8080/blockchain/latest` |
-| `GET` | `/blockchain/length` | Chain length | `curl http://127.0.0.1:8080/blockchain/length` |
-| `GET` | `/network/stats` | Network statistics | `curl http://127.0.0.1:8080/network/stats` |
+| `GET` | `/status` | Node and blockchain status | ✅ Working |
+| `GET` | `/health` | Health check | ✅ Working |
+| `GET` | `/info` | Node information | ✅ Working |
+| `GET` | `/wallets/{address}` | Wallet information | ✅ Working |
+| `GET` | `/wallets/{address}/balance` | Wallet balance | ✅ Working |
+| `GET` | `/wallets/{address}/backup` | Download wallet backup | ✅ Working |
+| `POST` | `/posts` | Create a new post | ✅ Working |
+| `GET` | `/posts/pending` | Get pending posts | ✅ Working |
+| `POST` | `/transfers` | Send characters | ✅ Working |
+| `GET` | `/transfers/pending` | Get pending transfers | ✅ Working |
+| `GET` | `/blockchain/latest` | Latest block | ✅ Working |
+| `GET` | `/blockchain/length` | Chain length | ✅ Working |
+| `GET` | `/network/stats` | Network statistics | ✅ Working |
+| `GET` | `/sync/status` | Sync status | ✅ Working |
 
-## 🔐 Security Best Practices
+## 🔐 Security Features
 
-### Wallet Security
+### Implemented Security
+- **ECDSA Signatures**: All posts and transfers cryptographically signed
+- **Public Key Recovery**: Signature verification with authorship validation
+- **Local API Only**: No exposed network ports by default (127.0.0.1)
+- **Wallet Security**: Proper file permissions and backup functionality
+- **Nonce Protection**: Replay attack prevention
+- **Hash Verification**: Block and post integrity validation
+
+### Security Best Practices
 - **Backup your wallet**: Save `YourWalletInfo.txt` in multiple secure locations
 - **Protect your private key**: Never share it with anyone
 - **Use secure environments**: Clean computers with updated software
-- **Regular backups**: Test your backup by importing on a test system
-
-### Network Security
 - **Firewall configuration**: Only open necessary ports (8080 for API, 9876 for mesh)
-- **Domain security**: Use secure domains for beacon mode
-- **Regular updates**: Keep your node software updated
+
+## 🚀 Development Roadmap
+
+### Phase 1: Core Infrastructure ✅ **COMPLETE**
+- ✅ Wallet system with ECDSA signing
+- ✅ Block and post logic with validation
+- ✅ Local storage with BoltDB
+- ✅ HTTP API with comprehensive endpoints
+- ✅ Transfer system with state management
+
+### Phase 2: Network Layer ✅ **COMPLETE**
+- ✅ Mesh network for peer-to-peer communication
+- ✅ Beacon system for network discovery
+- ✅ Trust-based peer management
+- ✅ Block synchronization across nodes
+
+### Phase 3: Consensus System ✅ **COMPLETE**
+- ✅ Forkless consensus with no data loss
+- ✅ Post gossip protocol
+- ✅ Block proposal and voting mechanism
+- ✅ Trust-based proposer selection
+- ✅ Dynamic trust score management
+
+### Phase 4: User Experience ✅ **COMPLETE**
+- ✅ Interactive setup wizard
+- ✅ Network and mode configuration
+- ✅ Wallet management
+- ✅ Bitcoin-style restart system
+
+### Phase 5: Production Readiness 🔄 **IN PROGRESS**
+- 🔄 Finalize consensus rules
+- 🔄 Create genesis block for mainnet
+- 🔄 Launch public mainnet nodes
+- 🔄 Activate uptime mining and rewards
+- 🔄 Complete security audits
+
+### Phase 6: Ecosystem Development ❌ **NOT STARTED**
+- ❌ Frontend applications (web/mobile)
+- ❌ Block explorer
+- ❌ Advanced API features
+- ❌ Performance optimization
+- ❌ Developer tools and SDKs
 
 ## 🤝 Contributing
 
@@ -303,7 +268,10 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 - **Documentation**: See `HowToUse.txt` for detailed usage instructions
 - **White Paper**: See `WhitePaper.txt` for technical details
 - **Network Design**: See `NetworkDesign.txt` for network architecture
+- **Consensus Protocol**: See `Consensus.txt` for consensus details
 
 ---
+
+**⚠️ IMPORTANT**: TruthChain is currently in development. The blockchain is not live yet, and no mainnet exists. This is a working prototype with all core features implemented, but it's not ready for production use. Use testnet or local mode for testing and development.
 
 **TruthChain**: Where truth is permanent, and history cannot be rewritten.

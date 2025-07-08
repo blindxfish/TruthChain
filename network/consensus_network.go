@@ -78,6 +78,8 @@ func NewConsensusNetwork(meshManager *MeshManager, consensusEngine *chain.Consen
 		syncManager.SetNetworkCallbacks(
 			cn.handleBlockRequestOutbound,
 			cn.handleBlockResponseOutbound,
+			cn.handleChainTipQueryOutbound,
+			cn.handleChainTipResponseOutbound,
 		)
 	}
 
@@ -168,6 +170,10 @@ func (cn *ConsensusNetwork) BroadcastMessage(messageType string, payload interfa
 	}
 
 	// Broadcast via mesh manager
+	if cn.meshManager == nil {
+		return fmt.Errorf("mesh manager not initialized")
+	}
+
 	if err := cn.meshManager.BroadcastMessage(messageData); err != nil {
 		return fmt.Errorf("failed to broadcast message: %w", err)
 	}
@@ -199,6 +205,10 @@ func (cn *ConsensusNetwork) SendMessageToPeer(peerID string, messageType string,
 	}
 
 	// Send via mesh manager
+	if cn.meshManager == nil {
+		return fmt.Errorf("mesh manager not initialized")
+	}
+
 	if err := cn.meshManager.SendMessageToPeer(peerID, messageData); err != nil {
 		return fmt.Errorf("failed to send message to peer %s: %w", peerID, err)
 	}
@@ -320,7 +330,13 @@ func (cn *ConsensusNetwork) handleProposalExpiredInbound(payload []byte, sourceP
 		return fmt.Errorf("failed to unmarshal proposal expired: %w", err)
 	}
 
-	// Handle proposal expiration (e.g., remove from local proposal manager)
+	// Handle proposal expiration in consensus engine
+	if cn.consensusEngine != nil {
+		if err := cn.consensusEngine.HandleProposalExpired(&expired); err != nil {
+			log.Printf("[ConsensusNetwork] Failed to handle expired proposal: %v", err)
+		}
+	}
+
 	log.Printf("[ConsensusNetwork] Received proposal expired for block %d from %s", expired.Index, expired.ProposerID)
 	return nil
 }
@@ -333,6 +349,14 @@ func (cn *ConsensusNetwork) handleBlockRequestOutbound(request *chain.BlockReque
 
 func (cn *ConsensusNetwork) handleBlockResponseOutbound(response *chain.BlockResponse) error {
 	return cn.BroadcastMessage(MessageTypeBlockResponse, response)
+}
+
+func (cn *ConsensusNetwork) handleChainTipQueryOutbound(query *chain.ChainTipQuery) error {
+	return cn.BroadcastMessage(MessageTypeChainTipQuery, query)
+}
+
+func (cn *ConsensusNetwork) handleChainTipResponseOutbound(response *chain.ChainTipResponse) error {
+	return cn.BroadcastMessage(MessageTypeChainTipResponse, response)
 }
 
 // Sync-related inbound handlers
@@ -362,14 +386,26 @@ func (cn *ConsensusNetwork) handleBlockResponseInbound(payload []byte, sourcePee
 }
 
 func (cn *ConsensusNetwork) handleChainTipQueryInbound(payload []byte, sourcePeer string) error {
-	// TODO: Implement chain tip query handling
-	log.Printf("[ConsensusNetwork] Received chain tip query from %s", sourcePeer)
+	var query chain.ChainTipQuery
+	if err := json.Unmarshal(payload, &query); err != nil {
+		return fmt.Errorf("failed to unmarshal chain tip query: %w", err)
+	}
+
+	if cn.syncManager != nil {
+		return cn.syncManager.HandleChainTipQuery(&query)
+	}
 	return nil
 }
 
 func (cn *ConsensusNetwork) handleChainTipResponseInbound(payload []byte, sourcePeer string) error {
-	// TODO: Implement chain tip response handling
-	log.Printf("[ConsensusNetwork] Received chain tip response from %s", sourcePeer)
+	var response chain.ChainTipResponse
+	if err := json.Unmarshal(payload, &response); err != nil {
+		return fmt.Errorf("failed to unmarshal chain tip response: %w", err)
+	}
+
+	if cn.syncManager != nil {
+		return cn.syncManager.HandleChainTipResponse(&response)
+	}
 	return nil
 }
 
@@ -403,4 +439,10 @@ func (cn *ConsensusNetwork) GetPeerCount() int {
 // IsPeerConnected checks if a peer is connected
 func (cn *ConsensusNetwork) IsPeerConnected(peerID string) bool {
 	return cn.meshManager.IsPeerConnected(peerID)
+}
+
+// SetMeshManager sets the mesh manager reference
+func (cn *ConsensusNetwork) SetMeshManager(mm *MeshManager) {
+	cn.meshManager = mm
+	log.Printf("[ConsensusNetwork] Mesh manager reference updated")
 }
