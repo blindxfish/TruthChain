@@ -576,3 +576,57 @@ func CreateBlockWithBeacon(index int, prevHash string, posts []Post, transfers [
 
 	return block
 }
+
+// NodeIntroduction represents a node's introduction message
+type NodeIntroduction struct {
+	NodeID        string  `json:"node_id"`
+	WalletAddress string  `json:"wallet_address"`
+	ChainTip      int     `json:"chain_tip"`
+	GenesisHash   string  `json:"genesis_hash"`
+	IsBeacon      bool    `json:"is_beacon"`
+	Uptime        float64 `json:"uptime"`
+	NetworkID     string  `json:"network_id"`
+	Timestamp     int64   `json:"timestamp"`
+	Signature     string  `json:"signature"`
+}
+
+// NodeIntroductionResponse represents a response to node introduction
+type NodeIntroductionResponse struct {
+	NodeID        string  `json:"node_id"`
+	WalletAddress string  `json:"wallet_address"`
+	ChainTip      int     `json:"chain_tip"`
+	GenesisHash   string  `json:"genesis_hash"`
+	IsBeacon      bool    `json:"is_beacon"`
+	Uptime        float64 `json:"uptime"`
+	NetworkID     string  `json:"network_id"`
+	SyncRequested bool    `json:"sync_requested"`
+	Timestamp     int64   `json:"timestamp"`
+	Signature     string  `json:"signature"`
+}
+
+// TimeBasedBlockRequest represents a request to create a time-based block
+type TimeBasedBlockRequest struct {
+	ProposerID string `json:"proposer_id"`
+	BlockIndex int    `json:"block_index"`
+	Timestamp  int64  `json:"timestamp"`
+	Signature  string `json:"signature"`
+}
+
+// TimeBasedBlockVote represents a vote on a time-based block request
+type TimeBasedBlockVote struct {
+	ProposerID string `json:"proposer_id"`
+	VoterID    string `json:"voter_id"`
+	BlockIndex int    `json:"block_index"`
+	Approved   bool   `json:"approved"`
+	Timestamp  int64  `json:"timestamp"`
+	Signature  string `json:"signature"`
+}
+
+// TimeBasedBlockApproval represents approval to create a time-based block
+type TimeBasedBlockApproval struct {
+	ProposerID string   `json:"proposer_id"`
+	BlockIndex int      `json:"block_index"`
+	ApprovedBy []string `json:"approved_by"`
+	Timestamp  int64    `json:"timestamp"`
+	Signature  string   `json:"signature"`
+}

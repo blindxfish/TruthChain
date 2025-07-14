@@ -319,6 +319,17 @@ func (mm *MeshManager) processReceivedData(address string, data []byte) {
 		return
 	}
 
+	// Check for other common protocol prefixes that might cause JSON parsing issues
+	if strings.HasPrefix(dataStr, "POST") || strings.HasPrefix(dataStr, "PUT") ||
+		strings.HasPrefix(dataStr, "PATCH") || strings.HasPrefix(dataStr, "OPTIONS") {
+		previewLen := 20
+		if len(dataStr) < previewLen {
+			previewLen = len(dataStr)
+		}
+		log.Printf("Received protocol message on mesh port from %s - ignoring: %s", address, dataStr[:previewLen])
+		return
+	}
+
 	// Check if it looks like JSON (starts with { or [)
 	if len(dataStr) > 0 && (dataStr[0] == '{' || dataStr[0] == '[') {
 		// Try to decode as NetworkMessage first
@@ -330,6 +341,12 @@ func (mm *MeshManager) processReceivedData(address string, data []byte) {
 				if mm.network.ConsensusMessageHandler != nil {
 					if err := mm.network.ConsensusMessageHandler(data, address); err != nil {
 						log.Printf("Failed to handle consensus message from %s: %v", address, err)
+						// Log the first 100 characters of the message for debugging
+						if len(dataStr) > 100 {
+							log.Printf("Message preview: %s...", dataStr[:100])
+						} else {
+							log.Printf("Message content: %s", dataStr)
+						}
 					}
 				} else {
 					log.Printf("Received consensus message but no handler registered")
@@ -343,7 +360,10 @@ func (mm *MeshManager) processReceivedData(address string, data []byte) {
 		if len(dataStr) > 50 {
 			dataStr = dataStr[:50] + "..."
 		}
-		log.Printf("Received unknown protocol data from %s: %s", address, dataStr)
+		// Only log if it's not a ping message (to avoid spam)
+		if !strings.HasPrefix(dataStr, "PING:") {
+			log.Printf("Received unknown protocol data from %s: %s", address, dataStr)
+		}
 	}
 
 	// Update last ping time

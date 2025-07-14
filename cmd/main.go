@@ -729,7 +729,7 @@ func NewTruthChainNode(config *NodeConfig) (*TruthChainNode, error) {
 	consensusConfig.PostThreshold = config.PostThreshold
 	consensusIntegration := chain.NewConsensusIntegration(blockchain, myWallet.GetAddress(), consensusConfig)
 	meshManager := trustNet.MeshManager
-	consensusNetwork := network.NewConsensusNetwork(meshManager, consensusIntegration.ConsensusEngine(), consensusIntegration.SyncManager(), myWallet.GetAddress())
+	consensusNetwork := network.NewConsensusNetwork(meshManager, consensusIntegration.ConsensusEngine(), consensusIntegration.SyncManager(), consensusIntegration, myWallet.GetAddress())
 	node.consensusIntegration = consensusIntegration
 	node.consensusNetwork = consensusNetwork
 
@@ -911,6 +911,20 @@ func (n *TruthChainNode) setupSyncCallbacks() {
 	)
 
 	log.Printf("Sync manager network callbacks configured")
+
+	// Set up time-based block consensus network callbacks
+	n.consensusIntegration.SetTimeBasedBlockNetworkCallbacks(
+		// Time-based block request callback - sends requests to the consensus network
+		func(request *chain.TimeBasedBlockRequest) error {
+			return n.consensusNetwork.BroadcastMessage("time_based_block_request", request)
+		},
+		// Time-based block vote callback - sends votes to the consensus network
+		func(vote *chain.TimeBasedBlockVote) error {
+			return n.consensusNetwork.BroadcastMessage("time_based_block_vote", vote)
+		},
+	)
+
+	log.Printf("Time-based block consensus network callbacks configured")
 }
 
 // handleSyncStatus returns the current sync status

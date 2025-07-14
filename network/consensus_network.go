@@ -12,10 +12,11 @@ import (
 
 // ConsensusNetwork integrates consensus with the mesh network
 type ConsensusNetwork struct {
-	meshManager     *MeshManager
-	consensusEngine *chain.ConsensusEngine
-	syncManager     *chain.SyncManager
-	nodeID          string
+	meshManager          *MeshManager
+	consensusEngine      *chain.ConsensusEngine
+	syncManager          *chain.SyncManager
+	consensusIntegration *chain.ConsensusIntegration
+	nodeID               string
 
 	// Message routing
 	messageHandlers map[string]func([]byte, string) error
@@ -51,14 +52,15 @@ const (
 )
 
 // NewConsensusNetwork creates a new consensus network integration
-func NewConsensusNetwork(meshManager *MeshManager, consensusEngine *chain.ConsensusEngine, syncManager *chain.SyncManager, nodeID string) *ConsensusNetwork {
+func NewConsensusNetwork(meshManager *MeshManager, consensusEngine *chain.ConsensusEngine, syncManager *chain.SyncManager, consensusIntegration *chain.ConsensusIntegration, nodeID string) *ConsensusNetwork {
 	cn := &ConsensusNetwork{
-		meshManager:     meshManager,
-		consensusEngine: consensusEngine,
-		syncManager:     syncManager,
-		nodeID:          nodeID,
-		messageHandlers: make(map[string]func([]byte, string) error),
-		stopChan:        make(chan struct{}),
+		meshManager:          meshManager,
+		consensusEngine:      consensusEngine,
+		syncManager:          syncManager,
+		consensusIntegration: consensusIntegration,
+		nodeID:               nodeID,
+		messageHandlers:      make(map[string]func([]byte, string) error),
+		stopChan:             make(chan struct{}),
 	}
 
 	// Register message handlers
@@ -131,6 +133,9 @@ func (cn *ConsensusNetwork) registerMessageHandlers() {
 	cn.messageHandlers[MessageTypeBlockResponse] = cn.handleBlockResponseInbound
 	cn.messageHandlers[MessageTypeChainTipQuery] = cn.handleChainTipQueryInbound
 	cn.messageHandlers[MessageTypeChainTipResponse] = cn.handleChainTipResponseInbound
+	cn.messageHandlers["time_based_block_request"] = cn.handleTimeBasedBlockRequestInbound
+	cn.messageHandlers["time_based_block_vote"] = cn.handleTimeBasedBlockVoteInbound
+	cn.messageHandlers["time_based_block_approval"] = cn.handleTimeBasedBlockApprovalInbound
 }
 
 // messageProcessor processes incoming consensus messages
@@ -445,4 +450,53 @@ func (cn *ConsensusNetwork) IsPeerConnected(peerID string) bool {
 func (cn *ConsensusNetwork) SetMeshManager(mm *MeshManager) {
 	cn.meshManager = mm
 	log.Printf("[ConsensusNetwork] Mesh manager reference updated")
+}
+
+// SetConsensusIntegration sets the consensus integration reference
+func (cn *ConsensusNetwork) SetConsensusIntegration(ci *chain.ConsensusIntegration) {
+	cn.consensusIntegration = ci
+	log.Printf("[ConsensusNetwork] Consensus integration reference updated")
+}
+
+// Time-based block consensus handlers
+
+func (cn *ConsensusNetwork) handleTimeBasedBlockRequestInbound(payload []byte, sourcePeer string) error {
+	var request chain.TimeBasedBlockRequest
+	if err := json.Unmarshal(payload, &request); err != nil {
+		return fmt.Errorf("failed to unmarshal time-based block request: %w", err)
+	}
+
+	// Pass to consensus integration if available
+	if cn.consensusIntegration != nil {
+		return cn.consensusIntegration.HandleTimeBasedBlockRequest(&request)
+	}
+
+	log.Printf("[ConsensusNetwork] Received time-based block request from %s for block %d (no consensus integration)", request.ProposerID, request.BlockIndex)
+	return nil
+}
+
+func (cn *ConsensusNetwork) handleTimeBasedBlockVoteInbound(payload []byte, sourcePeer string) error {
+	var vote chain.TimeBasedBlockVote
+	if err := json.Unmarshal(payload, &vote); err != nil {
+		return fmt.Errorf("failed to unmarshal time-based block vote: %w", err)
+	}
+
+	// Pass to consensus integration if available
+	if cn.consensusIntegration != nil {
+		return cn.consensusIntegration.HandleTimeBasedBlockVote(&vote)
+	}
+
+	log.Printf("[ConsensusNetwork] Received time-based block vote from %s for block %d: %t (no consensus integration)", vote.VoterID, vote.BlockIndex, vote.Approved)
+	return nil
+}
+
+func (cn *ConsensusNetwork) handleTimeBasedBlockApprovalInbound(payload []byte, sourcePeer string) error {
+	var approval chain.TimeBasedBlockApproval
+	if err := json.Unmarshal(payload, &approval); err != nil {
+		return fmt.Errorf("failed to unmarshal time-based block approval: %w", err)
+	}
+
+	// Pass to consensus integration if available
+	log.Printf("[ConsensusNetwork] Received time-based block approval from %s for block %d", approval.ProposerID, approval.BlockIndex)
+	return nil
 }

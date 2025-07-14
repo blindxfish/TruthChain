@@ -1,6 +1,7 @@
 package network
 
 import (
+	"encoding/json"
 	"fmt"
 	"log"
 	"net"
@@ -32,6 +33,7 @@ type TrustNetwork struct {
 
 	// Consensus integration
 	ConsensusMessageHandler func([]byte, string) error // Handler for consensus messages
+	ConsensusIntegration    *chain.ConsensusIntegration
 
 	// Configuration
 	ListenPort    int
@@ -75,6 +77,11 @@ const (
 	MessageTypePing
 	MessageTypePong
 	MessageTypeConsensus
+	MessageTypeNodeIntroduction
+	MessageTypeNodeIntroductionResponse
+	MessageTypeTimeBasedBlockRequest
+	MessageTypeTimeBasedBlockVote
+	MessageTypeTimeBasedBlockApproval
 )
 
 // PeerEvent represents peer-related events
@@ -416,6 +423,8 @@ func (tn *TrustNetwork) handlePeerEvent(event PeerEvent) {
 	switch event.Type {
 	case PeerEventConnected:
 		log.Printf("\033[32m🌱 New node connected: %s (Trust: %.2f)\033[0m", event.Peer.Address, event.Peer.TrustScore)
+		// Send node introduction message
+		go tn.sendNodeIntroduction(event.Peer.Address)
 	case PeerEventDisconnected:
 		log.Printf("Peer disconnected: %s - %s", event.Peer.Address, event.Reason)
 	case PeerEventTrustUpdated:
@@ -452,6 +461,16 @@ func (tn *TrustNetwork) handleMessage(msg NetworkMessage) {
 		tn.handlePongMessage(msg)
 	case MessageTypeConsensus:
 		tn.handleConsensusMessage(msg)
+	case MessageTypeNodeIntroduction:
+		tn.handleNodeIntroductionMessage(msg)
+	case MessageTypeNodeIntroductionResponse:
+		tn.handleNodeIntroductionResponseMessage(msg)
+	case MessageTypeTimeBasedBlockRequest:
+		tn.handleTimeBasedBlockRequestMessage(msg)
+	case MessageTypeTimeBasedBlockVote:
+		tn.handleTimeBasedBlockVoteMessage(msg)
+	case MessageTypeTimeBasedBlockApproval:
+		tn.handleTimeBasedBlockApprovalMessage(msg)
 	default:
 		log.Printf("Unknown message type: %d", msg.Type)
 	}
@@ -780,5 +799,166 @@ func (tn *TrustNetwork) periodicStatusLogger() {
 		case <-tn.StopChan:
 			return
 		}
+	}
+}
+
+// sendNodeIntroduction sends a NodeIntroduction message to a peer
+func (tn *TrustNetwork) sendNodeIntroduction(peerAddress string) {
+	if tn.ConsensusMessageHandler == nil {
+		return
+	}
+	if tn.Blockchain == nil {
+		return
+	}
+	// Use consensus integration to build the introduction
+	var intro *chain.NodeIntroduction
+	if tn.ConsensusIntegration != nil {
+		ciIntro, err := tn.ConsensusIntegration.CreateNodeIntroduction()
+		if err == nil {
+			intro = ciIntro
+		}
+	}
+	if intro == nil {
+		// Fallback
+		intro = &chain.NodeIntroduction{
+			NodeID:        tn.NodeID,
+			WalletAddress: tn.Wallet.GetAddress(),
+			ChainTip:      0,
+			GenesisHash:   "",
+			IsBeacon:      false,
+			Uptime:        0.0,
+			NetworkID:     "",
+			Timestamp:     time.Now().Unix(),
+			Signature:     "",
+		}
+	}
+	msg := NetworkMessage{
+		Type:      MessageTypeNodeIntroduction,
+		Source:    tn.NodeID,
+		Payload:   intro,
+		Timestamp: time.Now().Unix(),
+		TTL:       1,
+	}
+	log.Printf("[Network] Sending node introduction to %s", peerAddress)
+	if tn.MeshManager != nil {
+		data, err := json.Marshal(msg)
+		if err == nil {
+			err = tn.MeshManager.SendMessageToPeer(peerAddress, data)
+			if err != nil {
+				log.Printf("[Network] Failed to send node introduction to %s: %v", peerAddress, err)
+			}
+		}
+	}
+}
+
+// handleNodeIntroductionMessage handles an incoming NodeIntroduction message
+func (tn *TrustNetwork) handleNodeIntroductionMessage(msg NetworkMessage) {
+	intro, ok := msg.Payload.(*chain.NodeIntroduction)
+	if !ok {
+		log.Printf("Invalid node introduction message payload")
+		return
+	}
+	log.Printf("[Network] Received node introduction from %s", intro.NodeID)
+	// Pass to consensus integration and send response
+	if tn.ConsensusIntegration != nil {
+		response, err := tn.ConsensusIntegration.HandleNodeIntroduction(intro)
+		if err == nil && response != nil {
+			respMsg := NetworkMessage{
+				Type:      MessageTypeNodeIntroductionResponse,
+				Source:    tn.NodeID,
+				Payload:   response,
+				Timestamp: time.Now().Unix(),
+				TTL:       1,
+			}
+			if tn.MeshManager != nil {
+				data, err := json.Marshal(respMsg)
+				if err == nil {
+					err = tn.MeshManager.SendMessageToPeer(msg.Source, data)
+					if err != nil {
+						log.Printf("[Network] Failed to send node introduction response to %s: %v", msg.Source, err)
+					}
+				}
+			}
+		}
+	}
+}
+
+// handleNodeIntroductionResponseMessage handles an incoming NodeIntroductionResponse message
+func (tn *TrustNetwork) handleNodeIntroductionResponseMessage(msg NetworkMessage) {
+	resp, ok := msg.Payload.(*chain.NodeIntroductionResponse)
+	if !ok {
+		log.Printf("Invalid node introduction response message payload")
+		return
+	}
+	log.Printf("[Network] Received node introduction response from %s", resp.NodeID)
+	if tn.ConsensusIntegration != nil {
+		err := tn.ConsensusIntegration.HandleNodeIntroductionResponse(resp)
+		if err != nil {
+			log.Printf("[Network] Error handling node introduction response: %v", err)
+		}
+	}
+}
+
+// SetConsensusIntegration sets the consensus integration reference
+func (tn *TrustNetwork) SetConsensusIntegration(ci *chain.ConsensusIntegration) {
+	tn.ConsensusIntegration = ci
+}
+
+// handleTimeBasedBlockRequestMessage handles an incoming TimeBasedBlockRequest message
+func (tn *TrustNetwork) handleTimeBasedBlockRequestMessage(msg NetworkMessage) {
+	request, ok := msg.Payload.(*chain.TimeBasedBlockRequest)
+	if !ok {
+		log.Printf("Invalid TimeBasedBlockRequest payload")
+		return
+	}
+
+	log.Printf("Received time-based block request from %s for block %d", request.ProposerID, request.BlockIndex)
+
+	if tn.ConsensusIntegration != nil {
+		err := tn.ConsensusIntegration.HandleTimeBasedBlockRequest(request)
+		if err != nil {
+			log.Printf("Error handling time-based block request: %v", err)
+		}
+	} else {
+		log.Printf("ConsensusIntegration not available for time-based block request")
+	}
+}
+
+// handleTimeBasedBlockVoteMessage handles an incoming TimeBasedBlockVote message
+func (tn *TrustNetwork) handleTimeBasedBlockVoteMessage(msg NetworkMessage) {
+	vote, ok := msg.Payload.(*chain.TimeBasedBlockVote)
+	if !ok {
+		log.Printf("Invalid TimeBasedBlockVote payload")
+		return
+	}
+
+	log.Printf("Received time-based block vote from %s for block %d: %t", vote.VoterID, vote.BlockIndex, vote.Approved)
+
+	if tn.ConsensusIntegration != nil {
+		err := tn.ConsensusIntegration.HandleTimeBasedBlockVote(vote)
+		if err != nil {
+			log.Printf("Error handling time-based block vote: %v", err)
+		}
+	} else {
+		log.Printf("ConsensusIntegration not available for time-based block vote")
+	}
+}
+
+// handleTimeBasedBlockApprovalMessage handles an incoming TimeBasedBlockApproval message
+func (tn *TrustNetwork) handleTimeBasedBlockApprovalMessage(msg NetworkMessage) {
+	approval, ok := msg.Payload.(*chain.TimeBasedBlockApproval)
+	if !ok {
+		log.Printf("Invalid TimeBasedBlockApproval payload")
+		return
+	}
+
+	log.Printf("Received time-based block approval from %s for block %d", approval.ProposerID, approval.BlockIndex)
+
+	if tn.ConsensusIntegration != nil {
+		// TODO: Handle approval message in ConsensusIntegration
+		log.Printf("Time-based block approval received - block %d approved by %d nodes",
+			approval.BlockIndex, len(approval.ApprovedBy))
+	} else {
+		log.Printf("ConsensusIntegration not available for time-based block approval")
 	}
 }

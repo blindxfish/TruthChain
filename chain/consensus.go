@@ -65,6 +65,7 @@ type ConsensusConfig struct {
 	UptimeIncrement  float64       `json:"uptime_increment"`  // Trust increase per hour (default: 0.01)
 	SuccessIncrement float64       `json:"success_increment"` // Trust increase on success (default: 0.01)
 	FailurePenalty   float64       `json:"failure_penalty"`   // Trust decrease on failure (default: 0.1)
+	NetworkID        string        `json:"network_id"`        // Network identifier (mainnet/testnet)
 }
 
 // DefaultConsensusConfig returns default consensus configuration
@@ -77,6 +78,7 @@ func DefaultConsensusConfig() *ConsensusConfig {
 		UptimeIncrement:  0.01,
 		SuccessIncrement: 0.01,
 		FailurePenalty:   0.1,
+		NetworkID:        "truthchain-testnet", // Default to testnet
 	}
 }
 

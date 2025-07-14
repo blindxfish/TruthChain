@@ -34,6 +34,20 @@ type ConsensusIntegration struct {
 	// Channels
 	stopChan  chan struct{}
 	blockChan chan *Block
+
+	// Node introduction tracking
+	peerIntroductions map[string]*NodeIntroduction
+	introMutex        sync.RWMutex
+
+	// Time-based block consensus
+	timeBasedBlockRequests  map[string]*TimeBasedBlockRequest
+	timeBasedBlockVotes     map[string][]*TimeBasedBlockVote
+	timeBasedBlockApprovals map[string]*TimeBasedBlockApproval
+	timeBasedBlockMutex     sync.RWMutex
+
+	// Network callbacks for time-based block consensus
+	onTimeBasedBlockRequest func(*TimeBasedBlockRequest) error
+	onTimeBasedBlockVote    func(*TimeBasedBlockVote) error
 }
 
 // NewConsensusIntegration creates a new consensus integration
@@ -53,14 +67,18 @@ func NewConsensusIntegration(
 	syncManager := NewSyncManager(blockchain, nodeID, config)
 
 	ci := &ConsensusIntegration{
-		blockchain:      blockchain,
-		consensusEngine: consensusEngine,
-		blockBuilder:    blockBuilder,
-		syncManager:     syncManager,
-		config:          config,
-		nodeID:          nodeID,
-		stopChan:        make(chan struct{}),
-		blockChan:       make(chan *Block, 50),
+		blockchain:              blockchain,
+		consensusEngine:         consensusEngine,
+		blockBuilder:            blockBuilder,
+		syncManager:             syncManager,
+		config:                  config,
+		nodeID:                  nodeID,
+		stopChan:                make(chan struct{}),
+		blockChan:               make(chan *Block, 50),
+		peerIntroductions:       make(map[string]*NodeIntroduction),
+		timeBasedBlockRequests:  make(map[string]*TimeBasedBlockRequest),
+		timeBasedBlockVotes:     make(map[string][]*TimeBasedBlockVote),
+		timeBasedBlockApprovals: make(map[string]*TimeBasedBlockApproval),
 	}
 
 	// Set up callbacks
@@ -523,6 +541,15 @@ func (ci *ConsensusIntegration) SetSyncNetworkCallbacks(
 	ci.syncManager.SetNetworkCallbacks(onBlockRequest, onBlockResponse, onChainTipQuery, onChainTipResponse)
 }
 
+// SetTimeBasedBlockNetworkCallbacks sets the network callbacks for time-based block consensus
+func (ci *ConsensusIntegration) SetTimeBasedBlockNetworkCallbacks(
+	onTimeBasedBlockRequest func(*TimeBasedBlockRequest) error,
+	onTimeBasedBlockVote func(*TimeBasedBlockVote) error,
+) {
+	ci.onTimeBasedBlockRequest = onTimeBasedBlockRequest
+	ci.onTimeBasedBlockVote = onTimeBasedBlockVote
+}
+
 // HandleBlockRequest handles an incoming block request from the network
 func (ci *ConsensusIntegration) HandleBlockRequest(request *BlockRequest) error {
 	return ci.syncManager.HandleBlockRequest(request)
@@ -541,4 +568,337 @@ func (ci *ConsensusIntegration) HandleChainTipQuery(query *ChainTipQuery) error 
 // HandleChainTipResponse handles an incoming chain tip response from the network
 func (ci *ConsensusIntegration) HandleChainTipResponse(response *ChainTipResponse) error {
 	return ci.syncManager.HandleChainTipResponse(response)
+}
+
+// Node Introduction Methods
+
+// CreateNodeIntroduction creates a node introduction message
+func (ci *ConsensusIntegration) CreateNodeIntroduction() (*NodeIntroduction, error) {
+	// Get chain tip
+	chainTip, err := ci.syncManager.getMyChainTip()
+	if err != nil {
+		return nil, fmt.Errorf("failed to get chain tip: %w", err)
+	}
+
+	// Get genesis block hash
+	genesisHash := ""
+	genesisBlock, err := ci.blockchain.GetBlockByIndex(0)
+	if err == nil && genesisBlock != nil {
+		genesisHash = genesisBlock.Hash
+	}
+
+	// Get uptime (placeholder - should come from uptime tracker)
+	uptime := 0.0 // TODO: Get actual uptime from uptime tracker
+
+	intro := &NodeIntroduction{
+		NodeID:        ci.nodeID,
+		WalletAddress: ci.nodeID, // TODO: Get actual wallet address
+		ChainTip:      chainTip,
+		GenesisHash:   genesisHash,
+		IsBeacon:      false, // TODO: Get from config
+		Uptime:        uptime,
+		NetworkID:     ci.config.NetworkID,
+		Timestamp:     time.Now().Unix(),
+		Signature:     "", // TODO: Sign the introduction
+	}
+
+	return intro, nil
+}
+
+// HandleNodeIntroduction handles a node introduction from a peer
+func (ci *ConsensusIntegration) HandleNodeIntroduction(intro *NodeIntroduction) (*NodeIntroductionResponse, error) {
+	log.Printf("[ConsensusIntegration] Received node introduction from %s: tip=%d, genesis=%s",
+		intro.NodeID, intro.ChainTip, intro.GenesisHash[:8])
+
+	// Store the introduction
+	ci.introMutex.Lock()
+	ci.peerIntroductions[intro.NodeID] = intro
+	ci.introMutex.Unlock()
+
+	// Create our response
+	response, err := ci.CreateNodeIntroduction()
+	if err != nil {
+		return nil, fmt.Errorf("failed to create introduction response: %w", err)
+	}
+
+	// Determine if we need to sync
+	syncRequested := ci.shouldRequestSync(intro)
+
+	// Convert to response
+	introResponse := &NodeIntroductionResponse{
+		NodeID:        response.NodeID,
+		WalletAddress: response.WalletAddress,
+		ChainTip:      response.ChainTip,
+		GenesisHash:   response.GenesisHash,
+		IsBeacon:      response.IsBeacon,
+		Uptime:        response.Uptime,
+		NetworkID:     response.NetworkID,
+		SyncRequested: syncRequested,
+		Timestamp:     response.Timestamp,
+		Signature:     response.Signature,
+	}
+
+	if syncRequested {
+		log.Printf("[ConsensusIntegration] Requesting sync from %s (our tip: %d, their tip: %d)",
+			intro.NodeID, response.ChainTip, intro.ChainTip)
+		// Trigger sync
+		go ci.syncManager.CheckAndSyncIfNeeded()
+	}
+
+	return introResponse, nil
+}
+
+// HandleNodeIntroductionResponse handles a response to our node introduction
+func (ci *ConsensusIntegration) HandleNodeIntroductionResponse(response *NodeIntroductionResponse) error {
+	log.Printf("[ConsensusIntegration] Received introduction response from %s: tip=%d, sync_requested=%t",
+		response.NodeID, response.ChainTip, response.SyncRequested)
+
+	if response.SyncRequested {
+		log.Printf("[ConsensusIntegration] Peer %s requested sync from us", response.NodeID)
+		// TODO: Handle sync request from peer
+	}
+
+	return nil
+}
+
+// shouldRequestSync determines if we should request sync from a peer
+func (ci *ConsensusIntegration) shouldRequestSync(intro *NodeIntroduction) bool {
+	myTip, err := ci.syncManager.getMyChainTip()
+	if err != nil {
+		log.Printf("[ConsensusIntegration] Failed to get own chain tip: %v", err)
+		return false
+	}
+
+	// If we have no blocks, accept any chain
+	if myTip == -1 {
+		log.Printf("[ConsensusIntegration] No blocks - will accept chain from %s", intro.NodeID)
+		return true
+	}
+
+	// If peer has higher tip, check genesis block
+	if intro.ChainTip > myTip {
+		// Check if we have the same genesis block
+		myGenesisHash := ""
+		myGenesisBlock, err := ci.blockchain.GetBlockByIndex(0)
+		if err == nil && myGenesisBlock != nil {
+			myGenesisHash = myGenesisBlock.Hash
+		}
+
+		if myGenesisHash == "" {
+			// We have no genesis block, accept any chain
+			log.Printf("[ConsensusIntegration] No genesis block - will accept chain from %s", intro.NodeID)
+			return true
+		}
+
+		if intro.GenesisHash == myGenesisHash {
+			// Same genesis block, safe to sync
+			log.Printf("[ConsensusIntegration] Same genesis block - will sync from %s", intro.NodeID)
+			return true
+		} else {
+			// Different genesis block, don't sync
+			log.Printf("[ConsensusIntegration] Different genesis block - won't sync from %s", intro.NodeID)
+			return false
+		}
+	}
+
+	return false
+}
+
+// Time-Based Block Consensus Methods
+
+// RequestTimeBasedBlock requests consensus to create a time-based block
+func (ci *ConsensusIntegration) RequestTimeBasedBlock() error {
+	// Get next block index
+	latestBlock, err := ci.blockchain.GetLatestBlock()
+	if err != nil {
+		if err.Error() == "no blocks found" {
+			log.Printf("[ConsensusIntegration] No blocks found - cannot request time-based block")
+			return nil
+		}
+		return fmt.Errorf("failed to get latest block: %w", err)
+	}
+
+	nextIndex := latestBlock.Index + 1
+	requestID := fmt.Sprintf("time_block_%d_%s", nextIndex, ci.nodeID)
+
+	request := &TimeBasedBlockRequest{
+		ProposerID: ci.nodeID,
+		BlockIndex: nextIndex,
+		Timestamp:  time.Now().Unix(),
+		Signature:  "", // TODO: Sign the request
+	}
+
+	ci.timeBasedBlockMutex.Lock()
+	ci.timeBasedBlockRequests[requestID] = request
+	ci.timeBasedBlockMutex.Unlock()
+
+	log.Printf("[ConsensusIntegration] Requesting time-based block %d consensus", nextIndex)
+	return ci.handleTimeBasedBlockRequestOutbound(request)
+}
+
+// HandleTimeBasedBlockRequest handles a time-based block request from another node
+func (ci *ConsensusIntegration) HandleTimeBasedBlockRequest(request *TimeBasedBlockRequest) error {
+	log.Printf("[ConsensusIntegration] Received time-based block request from %s for block %d",
+		request.ProposerID, request.BlockIndex)
+
+	// Check if we should approve
+	approved := ci.shouldApproveTimeBasedBlock(request)
+
+	vote := &TimeBasedBlockVote{
+		ProposerID: request.ProposerID,
+		VoterID:    ci.nodeID,
+		BlockIndex: request.BlockIndex,
+		Approved:   approved,
+		Timestamp:  time.Now().Unix(),
+		Signature:  "", // TODO: Sign the vote
+	}
+
+	requestID := fmt.Sprintf("time_block_%d_%s", request.BlockIndex, request.ProposerID)
+
+	ci.timeBasedBlockMutex.Lock()
+	if ci.timeBasedBlockVotes[requestID] == nil {
+		ci.timeBasedBlockVotes[requestID] = make([]*TimeBasedBlockVote, 0)
+	}
+	ci.timeBasedBlockVotes[requestID] = append(ci.timeBasedBlockVotes[requestID], vote)
+	ci.timeBasedBlockMutex.Unlock()
+
+	log.Printf("[ConsensusIntegration] Voted %t on time-based block %d from %s",
+		approved, request.BlockIndex, request.ProposerID)
+
+	return ci.handleTimeBasedBlockVoteOutbound(vote)
+}
+
+// HandleTimeBasedBlockVote handles a vote on a time-based block request
+func (ci *ConsensusIntegration) HandleTimeBasedBlockVote(vote *TimeBasedBlockVote) error {
+	requestID := fmt.Sprintf("time_block_%d_%s", vote.BlockIndex, vote.ProposerID)
+
+	ci.timeBasedBlockMutex.Lock()
+	if ci.timeBasedBlockVotes[requestID] == nil {
+		ci.timeBasedBlockVotes[requestID] = make([]*TimeBasedBlockVote, 0)
+	}
+	ci.timeBasedBlockVotes[requestID] = append(ci.timeBasedBlockVotes[requestID], vote)
+	ci.timeBasedBlockMutex.Unlock()
+
+	log.Printf("[ConsensusIntegration] Received vote %t on time-based block %d from %s",
+		vote.Approved, vote.BlockIndex, vote.VoterID)
+
+	// Check if we have enough votes for approval
+	ci.checkTimeBasedBlockApproval(requestID)
+
+	return nil
+}
+
+// shouldApproveTimeBasedBlock determines if we should approve a time-based block request
+func (ci *ConsensusIntegration) shouldApproveTimeBasedBlock(request *TimeBasedBlockRequest) bool {
+	// Check if this is the next block in sequence
+	latestBlock, err := ci.blockchain.GetLatestBlock()
+	if err != nil {
+		return false
+	}
+
+	if request.BlockIndex != latestBlock.Index+1 {
+		log.Printf("[ConsensusIntegration] Block index mismatch: expected %d, got %d",
+			latestBlock.Index+1, request.BlockIndex)
+		return false
+	}
+
+	// Check if we have no pending posts (time-based blocks should be empty)
+	postCount := ci.consensusEngine.mempool.GetPostCount()
+	if postCount > 0 {
+		log.Printf("[ConsensusIntegration] Have %d pending posts - should create content block instead", postCount)
+		return false
+	}
+
+	// Check if enough time has passed since last block
+	timeSinceLastBlock := time.Since(time.Unix(latestBlock.Timestamp, 0))
+	if timeSinceLastBlock < 10*time.Minute {
+		log.Printf("[ConsensusIntegration] Only %v since last block - too soon for time-based block", timeSinceLastBlock)
+		return false
+	}
+
+	return true
+}
+
+// checkTimeBasedBlockApproval checks if we have enough votes to approve a time-based block
+func (ci *ConsensusIntegration) checkTimeBasedBlockApproval(requestID string) {
+	ci.timeBasedBlockMutex.Lock()
+	votes := ci.timeBasedBlockVotes[requestID]
+	ci.timeBasedBlockMutex.Unlock()
+
+	if len(votes) == 0 {
+		return
+	}
+
+	// Count approvals
+	approvals := 0
+	for _, vote := range votes {
+		if vote.Approved {
+			approvals++
+		}
+	}
+
+	// TODO: Get actual peer count from network
+	peerCount := 1 // Placeholder
+	requiredApprovals := (peerCount / 2) + 1
+
+	if approvals >= requiredApprovals {
+		log.Printf("[ConsensusIntegration] Time-based block approved with %d/%d votes", approvals, peerCount)
+
+		// Create the time-based block
+		ci.createApprovedTimeBasedBlock(requestID)
+	}
+}
+
+// createApprovedTimeBasedBlock creates a time-based block after approval
+func (ci *ConsensusIntegration) createApprovedTimeBasedBlock(requestID string) {
+	ci.timeBasedBlockMutex.Lock()
+	request := ci.timeBasedBlockRequests[requestID]
+	ci.timeBasedBlockMutex.Unlock()
+
+	if request == nil {
+		log.Printf("[ConsensusIntegration] No request found for %s", requestID)
+		return
+	}
+
+	// Get latest block
+	latestBlock, err := ci.blockchain.GetLatestBlock()
+	if err != nil {
+		log.Printf("[ConsensusIntegration] Failed to get latest block: %v", err)
+		return
+	}
+
+	// Create time-based block
+	block, err := ci.blockBuilder.BuildTimeBasedBlock(request.BlockIndex, latestBlock.Hash, latestBlock.StateRoot)
+	if err != nil {
+		log.Printf("[ConsensusIntegration] Failed to build time-based block: %v", err)
+		return
+	}
+
+	// Process the block
+	ci.blockChan <- block
+
+	log.Printf("[ConsensusIntegration] Created approved time-based block %d", block.Index)
+}
+
+// Network callback handlers for time-based blocks
+func (ci *ConsensusIntegration) handleTimeBasedBlockRequestOutbound(request *TimeBasedBlockRequest) error {
+	log.Printf("[ConsensusIntegration] Broadcasting time-based block request for block %d", request.BlockIndex)
+
+	if ci.onTimeBasedBlockRequest != nil {
+		return ci.onTimeBasedBlockRequest(request)
+	}
+
+	log.Printf("[ConsensusIntegration] No network callback set for time-based block request")
+	return nil
+}
+
+func (ci *ConsensusIntegration) handleTimeBasedBlockVoteOutbound(vote *TimeBasedBlockVote) error {
+	log.Printf("[ConsensusIntegration] Broadcasting time-based block vote for block %d: %t", vote.BlockIndex, vote.Approved)
+
+	if ci.onTimeBasedBlockVote != nil {
+		return ci.onTimeBasedBlockVote(vote)
+	}
+
+	log.Printf("[ConsensusIntegration] No network callback set for time-based block vote")
+	return nil
 }
