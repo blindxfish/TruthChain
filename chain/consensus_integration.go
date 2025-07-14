@@ -283,26 +283,56 @@ func (ci *ConsensusIntegration) reservationMonitor() {
 
 // checkTimeBasedBlock checks if a time-based block should be created
 func (ci *ConsensusIntegration) checkTimeBasedBlock() {
-	// DISABLED: Time-based blocks should go through consensus protocol
-	// This method is disabled to ensure all blocks follow the proper consensus flow:
-	// 1. Post gossip
-	// 2. Block proposal with post hashes
-	// 3. Voting and approval
-	// 4. Block creation only after approval
+	// Get latest block to check timing
+	latestBlock, err := ci.blockchain.GetLatestBlock()
+	if err != nil {
+		if err.Error() == "no blocks found" {
+			log.Printf("[ConsensusIntegration] No blocks found yet - cannot check time-based blocks")
+			return
+		}
+		log.Printf("[ConsensusIntegration] Failed to get latest block for time-based check: %v", err)
+		return
+	}
 
-	// Instead of creating blocks directly, we should:
-	// 1. Check if we have enough posts to propose a block
-	// 2. If yes, propose a block through consensus
-	// 3. If no, wait for more posts or let other nodes propose
+	// Check if enough time has passed since last block (10 minutes)
+	timeSinceLastBlock := time.Since(time.Unix(latestBlock.Timestamp, 0))
+	if timeSinceLastBlock < 10*time.Minute {
+		log.Printf("[ConsensusIntegration] Only %v since last block - too soon for time-based block", timeSinceLastBlock)
+		return
+	}
 
+	// Check if we have pending posts - if so, don't create time-based block
 	postCount := ci.consensusEngine.mempool.GetPostCount()
-	if postCount >= ci.config.PostThreshold {
-		log.Printf("[ConsensusIntegration] Have %d posts (threshold: %d) - should propose block through consensus",
-			postCount, ci.config.PostThreshold)
-		// TODO: Trigger block proposal through consensus engine
-	} else {
-		log.Printf("[ConsensusIntegration] Only have %d posts (need %d) - waiting for more posts",
-			postCount, ci.config.PostThreshold)
+	if postCount > 0 {
+		log.Printf("[ConsensusIntegration] Have %d pending posts - should create content block instead", postCount)
+		return
+	}
+
+	// Check if there's already a pending time-based block request for this index
+	nextIndex := latestBlock.Index + 1
+	requestID := fmt.Sprintf("time_block_%d_%s", nextIndex, ci.nodeID)
+
+	ci.timeBasedBlockMutex.RLock()
+	_, exists := ci.timeBasedBlockRequests[requestID]
+	ci.timeBasedBlockMutex.RUnlock()
+
+	if exists {
+		log.Printf("[ConsensusIntegration] Already have pending time-based block request for block %d", nextIndex)
+		return
+	}
+
+	// Check if there's already a block proposal for this index
+	if _, exists := ci.consensusEngine.proposalManager.GetReservation(nextIndex); exists {
+		log.Printf("[ConsensusIntegration] Already have block proposal for block %d", nextIndex)
+		return
+	}
+
+	// All conditions met - request time-based block consensus
+	log.Printf("[ConsensusIntegration] Requesting time-based block %d consensus (no posts, %v since last block)",
+		nextIndex, timeSinceLastBlock)
+
+	if err := ci.RequestTimeBasedBlock(); err != nil {
+		log.Printf("[ConsensusIntegration] Failed to request time-based block: %v", err)
 	}
 }
 
@@ -733,6 +763,29 @@ func (ci *ConsensusIntegration) RequestTimeBasedBlock() error {
 	ci.timeBasedBlockMutex.Unlock()
 
 	log.Printf("[ConsensusIntegration] Requesting time-based block %d consensus", nextIndex)
+
+	// Vote for our own request since we know conditions are met
+	approved := ci.shouldApproveTimeBasedBlock(request)
+	vote := &TimeBasedBlockVote{
+		ProposerID: ci.nodeID,
+		VoterID:    ci.nodeID,
+		BlockIndex: nextIndex,
+		Approved:   approved,
+		Timestamp:  time.Now().Unix(),
+		Signature:  "", // TODO: Sign the vote
+	}
+
+	// Add our own vote
+	ci.timeBasedBlockMutex.Lock()
+	if ci.timeBasedBlockVotes[requestID] == nil {
+		ci.timeBasedBlockVotes[requestID] = make([]*TimeBasedBlockVote, 0)
+	}
+	ci.timeBasedBlockVotes[requestID] = append(ci.timeBasedBlockVotes[requestID], vote)
+	ci.timeBasedBlockMutex.Unlock()
+
+	log.Printf("[ConsensusIntegration] Self-voted %t on time-based block %d", approved, nextIndex)
+
+	// Broadcast the request to other nodes
 	return ci.handleTimeBasedBlockRequestOutbound(request)
 }
 
@@ -837,9 +890,25 @@ func (ci *ConsensusIntegration) checkTimeBasedBlockApproval(requestID string) {
 		}
 	}
 
-	// TODO: Get actual peer count from network
-	peerCount := 1 // Placeholder
+	// Get actual peer count from network
+	peerCount := 1 // Default to 1 (ourselves)
+	if ci.syncManager != nil {
+		// Use the sync manager's peer query provider
+		if peers, err := ci.syncManager.GetConnectedPeers(); err == nil {
+			peerCount = len(peers) + 1 // Total network size (peers + ourselves)
+		}
+	}
+
+	// Require majority approval (more than 50% of total network)
 	requiredApprovals := (peerCount / 2) + 1
+
+	log.Printf("[ConsensusIntegration] Time-based block votes: %d/%d approvals (need %d) - total network size: %d",
+		approvals, peerCount, requiredApprovals, peerCount)
+
+	// Log individual votes for debugging
+	for i, vote := range votes {
+		log.Printf("[ConsensusIntegration] Vote %d: %s voted %t", i+1, vote.VoterID, vote.Approved)
+	}
 
 	if approvals >= requiredApprovals {
 		log.Printf("[ConsensusIntegration] Time-based block approved with %d/%d votes", approvals, peerCount)
@@ -868,7 +937,7 @@ func (ci *ConsensusIntegration) createApprovedTimeBasedBlock(requestID string) {
 	}
 
 	// Create time-based block
-	block, err := ci.blockBuilder.BuildTimeBasedBlock(request.BlockIndex, latestBlock.Hash, latestBlock.StateRoot)
+	block, err := ci.blockBuilder.BuildTimeBasedBlock(request.BlockIndex, latestBlock.Hash, latestBlock.StateRoot, latestBlock.Timestamp)
 	if err != nil {
 		log.Printf("[ConsensusIntegration] Failed to build time-based block: %v", err)
 		return

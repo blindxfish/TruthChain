@@ -484,7 +484,13 @@ func (tn *TrustNetwork) handleGossipMessage(msg NetworkMessage) {
 		return
 	}
 	tn.PeerTable.ProcessGossipMessage(msg.Source, gossipMsg)
-	log.Printf("Processed mesh gossip message from %s", msg.Source)
+
+	// Safe logging with nil check
+	source := msg.Source
+	if source == "" {
+		source = "unknown"
+	}
+	log.Printf("Processed mesh gossip message from %s", source)
 }
 
 // handlePostMessage processes post messages
@@ -530,7 +536,12 @@ func (tn *TrustNetwork) handlePostMessage(msg NetworkMessage) {
 		tn.gossipToPeers(&msg, msg.Source)
 	}
 
-	log.Printf("Received post from %s: %s", msg.Source, post.Hash)
+	// Safe logging with nil check
+	source := msg.Source
+	if source == "" {
+		source = "unknown"
+	}
+	log.Printf("Received post from %s: %s", source, post.Hash)
 }
 
 // handleTransferMessage processes transfer messages
@@ -564,19 +575,34 @@ func (tn *TrustNetwork) handleTransferMessage(msg NetworkMessage) {
 		tn.gossipToPeers(&msg, msg.Source)
 	}
 
-	log.Printf("Received transfer from %s: %s", msg.Source, transfer.Hash)
+	// Safe logging with nil check
+	source := msg.Source
+	if source == "" {
+		source = "unknown"
+	}
+	log.Printf("Received transfer from %s: %s", source, transfer.Hash)
 }
 
 // handlePingMessage processes ping messages
 func (tn *TrustNetwork) handlePingMessage(msg NetworkMessage) {
 	// Respond with pong (implementation will be added)
-	log.Printf("Received ping from %s", msg.Source)
+	// Safe logging with nil check
+	source := msg.Source
+	if source == "" {
+		source = "unknown"
+	}
+	log.Printf("Received ping from %s", source)
 }
 
 // handlePongMessage processes pong messages
 func (tn *TrustNetwork) handlePongMessage(msg NetworkMessage) {
 	// Update peer latency (implementation will be added)
-	log.Printf("Received pong from %s", msg.Source)
+	// Safe logging with nil check
+	source := msg.Source
+	if source == "" {
+		source = "unknown"
+	}
+	log.Printf("Received pong from %s", source)
 }
 
 // handleConsensusMessage processes consensus messages
@@ -875,7 +901,12 @@ func (tn *TrustNetwork) handleNodeIntroductionMessage(msg NetworkMessage) {
 				if err == nil {
 					err = tn.MeshManager.SendMessageToPeer(msg.Source, data)
 					if err != nil {
-						log.Printf("[Network] Failed to send node introduction response to %s: %v", msg.Source, err)
+						// Safe logging with nil check
+						source := msg.Source
+						if source == "" {
+							source = "unknown"
+						}
+						log.Printf("[Network] Failed to send node introduction response to %s: %v", source, err)
 					}
 				}
 			}

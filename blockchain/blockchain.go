@@ -98,8 +98,8 @@ func NewBlockchain(storage store.Storage, postThreshold int, networkID string) (
 		return nil, fmt.Errorf("failed to initialize state: %w", err)
 	}
 
-	// Start background goroutine for time-based block creation
-	go bc.timeBasedBlockLoop()
+	// Time-based block creation is now handled by consensus system
+	// No need to start timeBasedBlockLoop() here
 
 	return bc, nil
 }
@@ -228,10 +228,8 @@ func (bc *Blockchain) AddPost(post chain.Post) error {
 		return bc.createBlockFromPending()
 	}
 
-	// Check if we should create a block based on time interval
-	if bc.shouldCreateTimeBasedBlock() {
-		return bc.createTimeBasedBlock()
-	}
+	// Time-based block creation is now handled by consensus system
+	// No need to check shouldCreateTimeBasedBlock() here
 
 	return nil
 }
@@ -978,77 +976,6 @@ func (bc *Blockchain) rollbackToBlock(blockIndex int) error {
 	// 3. Handle orphaned blocks
 
 	return nil
-}
-
-// shouldCreateTimeBasedBlock checks if we should create a block based on time interval
-func (bc *Blockchain) shouldCreateTimeBasedBlock() bool {
-	bc.mu.RLock()
-	defer bc.mu.RUnlock()
-
-	// Check if enough time has passed since the last block
-	return time.Since(bc.lastBlockTime) >= bc.TimeInterval
-}
-
-// createTimeBasedBlock creates a new block based on time interval (empty block for mining rewards)
-func (bc *Blockchain) createTimeBasedBlock() error {
-	bc.mu.Lock()
-	defer bc.mu.Unlock()
-
-	// Get the latest block
-	latestBlock, err := bc.storage.GetLatestBlock()
-	if err != nil {
-		// Check if this is because there are no blocks yet
-		if err.Error() == "no blocks found" {
-			return fmt.Errorf("no blocks found yet - cannot create time-based block")
-		}
-		return fmt.Errorf("failed to get latest block: %w", err)
-	}
-
-	// Calculate new state root for the new block index
-	newStateRoot := bc.stateManager.CalculateStateRoot(latestBlock.Index + 1)
-
-	// Create a new empty block for mining rewards
-	newBlock := &chain.Block{
-		Index:     latestBlock.Index + 1,
-		Timestamp: time.Now().Unix(),
-		PrevHash:  latestBlock.Hash,
-		Posts:     []chain.Post{},     // Empty block - no posts
-		Transfers: []chain.Transfer{}, // No transfers
-		StateRoot: newStateRoot,       // Use new state root with correct block index
-		CharCount: 0,                  // No characters in empty block
-	}
-
-	// Calculate and set block hash
-	newBlock.SetHash()
-
-	log.Printf("[BlockCreate] Creating time-based block #%d", newBlock.Index)
-	log.Printf("[BlockCreate] PrevHash: %s", newBlock.PrevHash)
-	log.Printf("[BlockCreate] StateRoot: %s (BlockIndex: %d)", newBlock.StateRoot.Hash, newBlock.StateRoot.BlockIndex)
-	log.Printf("[BlockCreate] CharCount: %d", newBlock.CharCount)
-
-	// Save the block
-	if err := bc.storage.SaveBlock(newBlock); err != nil {
-		return fmt.Errorf("failed to save time-based block: %w", err)
-	}
-
-	// Update last block time
-	bc.lastBlockTime = time.Now()
-
-	log.Printf("[BlockCreate] Time-based block #%d created and saved successfully", newBlock.Index)
-
-	return nil
-}
-
-// timeBasedBlockLoop is a background goroutine to check for time-based blocks and create them
-func (bc *Blockchain) timeBasedBlockLoop() {
-	// DISABLED: Time-based blocks should go through consensus protocol
-	// This method is disabled to ensure all blocks follow the proper consensus flow
-	log.Printf("[Blockchain] Time-based block creation disabled - blocks must go through consensus protocol")
-
-	// Sleep indefinitely to prevent any time-based block creation
-	for {
-		time.Sleep(1 * time.Hour) // Check every hour but do nothing
-	}
 }
 
 // SaveBlock saves a block to storage

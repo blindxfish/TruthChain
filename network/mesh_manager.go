@@ -330,41 +330,8 @@ func (mm *MeshManager) processReceivedData(address string, data []byte) {
 		return
 	}
 
-	// Check if it looks like JSON (starts with { or [)
-	if len(dataStr) > 0 && (dataStr[0] == '{' || dataStr[0] == '[') {
-		// Try to decode as NetworkMessage first
-		if err := mm.ReceiveNetworkMessage(data); err != nil {
-			// If it's not a NetworkMessage, it might be a consensus message
-			// Check if it has a "type" field (consensus messages have this)
-			if strings.Contains(dataStr, `"type"`) {
-				// Route to consensus handler if available
-				if mm.network.ConsensusMessageHandler != nil {
-					if err := mm.network.ConsensusMessageHandler(data, address); err != nil {
-						log.Printf("Failed to handle consensus message from %s: %v", address, err)
-						// Log the first 100 characters of the message for debugging
-						if len(dataStr) > 100 {
-							log.Printf("Message preview: %s...", dataStr[:100])
-						} else {
-							log.Printf("Message content: %s", dataStr)
-						}
-					}
-				} else {
-					log.Printf("Received consensus message but no handler registered")
-				}
-			} else {
-				log.Printf("Failed to decode JSON mesh message from %s: %v", address, err)
-			}
-		}
-	} else {
-		// Unknown protocol - log but don't spam
-		if len(dataStr) > 50 {
-			dataStr = dataStr[:50] + "..."
-		}
-		// Only log if it's not a ping message (to avoid spam)
-		if !strings.HasPrefix(dataStr, "PING:") {
-			log.Printf("Received unknown protocol data from %s: %s", address, dataStr)
-		}
-	}
+	// Try to extract and process multiple JSON messages
+	mm.processMultipleJSONMessages(address, dataStr)
 
 	// Update last ping time
 	mm.mu.Lock()
@@ -372,6 +339,126 @@ func (mm *MeshManager) processReceivedData(address string, data []byte) {
 		conn.LastPing = time.Now()
 	}
 	mm.mu.Unlock()
+}
+
+// processMultipleJSONMessages handles multiple JSON messages that might be concatenated
+func (mm *MeshManager) processMultipleJSONMessages(address, dataStr string) {
+	// Find all JSON objects in the data
+	start := 0
+	for start < len(dataStr) {
+		// Find the start of a JSON object
+		jsonStart := -1
+		for i := start; i < len(dataStr); i++ {
+			if dataStr[i] == '{' || dataStr[i] == '[' {
+				jsonStart = i
+				break
+			}
+		}
+
+		if jsonStart == -1 {
+			// No more JSON objects found
+			break
+		}
+
+		// Find the end of this JSON object
+		braceCount := 0
+		bracketCount := 0
+		jsonEnd := -1
+		inString := false
+		escapeNext := false
+
+		for i := jsonStart; i < len(dataStr); i++ {
+			char := dataStr[i]
+
+			if escapeNext {
+				escapeNext = false
+				continue
+			}
+
+			if char == '\\' {
+				escapeNext = true
+				continue
+			}
+
+			if char == '"' && !escapeNext {
+				inString = !inString
+				continue
+			}
+
+			if !inString {
+				if char == '{' {
+					braceCount++
+				} else if char == '}' {
+					braceCount--
+					if braceCount == 0 && bracketCount == 0 {
+						jsonEnd = i + 1
+						break
+					}
+				} else if char == '[' {
+					bracketCount++
+				} else if char == ']' {
+					bracketCount--
+					if braceCount == 0 && bracketCount == 0 {
+						jsonEnd = i + 1
+						break
+					}
+				}
+			}
+		}
+
+		if jsonEnd == -1 {
+			// Incomplete JSON object, wait for more data
+			break
+		}
+
+		// Extract the JSON message
+		jsonMessage := dataStr[jsonStart:jsonEnd]
+		jsonData := []byte(jsonMessage)
+
+		// Process this JSON message
+		mm.processSingleJSONMessage(address, jsonData)
+
+		// Move to the next potential message
+		start = jsonEnd
+	}
+
+	// If there's remaining data that's not JSON, log it
+	if start < len(dataStr) {
+		remaining := dataStr[start:]
+		if len(remaining) > 50 {
+			remaining = remaining[:50] + "..."
+		}
+		if !strings.HasPrefix(remaining, "PING:") {
+			log.Printf("Received non-JSON data from %s after JSON messages: %s", address, remaining)
+		}
+	}
+}
+
+// processSingleJSONMessage processes a single JSON message
+func (mm *MeshManager) processSingleJSONMessage(address string, jsonData []byte) {
+	// Try to decode as NetworkMessage first
+	if err := mm.ReceiveNetworkMessage(jsonData); err != nil {
+		// If it's not a NetworkMessage, it might be a consensus message
+		// Check if it has a "type" field (consensus messages have this)
+		if strings.Contains(string(jsonData), `"type"`) {
+			// Route to consensus handler if available
+			if mm.network.ConsensusMessageHandler != nil {
+				if err := mm.network.ConsensusMessageHandler(jsonData, address); err != nil {
+					log.Printf("Failed to handle consensus message from %s: %v", address, err)
+					// Log the first 100 characters of the message for debugging
+					if len(jsonData) > 100 {
+						log.Printf("Message preview: %s...", string(jsonData[:100]))
+					} else {
+						log.Printf("Message content: %s", string(jsonData))
+					}
+				}
+			} else {
+				log.Printf("Received consensus message but no handler registered")
+			}
+		} else {
+			log.Printf("Failed to decode JSON mesh message from %s: %v", address, err)
+		}
+	}
 }
 
 // connectionManager handles connection events

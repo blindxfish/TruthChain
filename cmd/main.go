@@ -150,7 +150,7 @@ func saveConfig(config *NodeConfig) error {
 	return nil
 }
 
-const VERSION = "v0.2.4"
+const VERSION = "v0.2.5"
 
 func main() {
 	// Initialize dual logging: both console and file

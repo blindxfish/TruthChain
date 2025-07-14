@@ -88,12 +88,13 @@ func (bb *BlockBuilder) BuildBlockFromProposal(reservation *BlockReservation, pr
 }
 
 // BuildTimeBasedBlock builds a time-based block when no posts are available
-func (bb *BlockBuilder) BuildTimeBasedBlock(blockIndex int, prevHash string, prevStateRoot *StateRoot) (*Block, error) {
+func (bb *BlockBuilder) BuildTimeBasedBlock(blockIndex int, prevHash string, prevStateRoot *StateRoot, lastBlockTimestamp int64) (*Block, error) {
 	bb.mu.Lock()
 	defer bb.mu.Unlock()
 
-	// Check if enough time has passed
-	if time.Since(bb.lastBlockTime) < bb.timeInterval {
+	// Check if enough time has passed since the actual last block
+	timeSinceLastBlock := time.Since(time.Unix(lastBlockTimestamp, 0))
+	if timeSinceLastBlock < bb.timeInterval {
 		return nil, fmt.Errorf("not enough time passed since last block")
 	}
 

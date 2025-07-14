@@ -578,8 +578,8 @@ func (sm *SyncManager) HandleChainTipQuery(query *ChainTipQuery) error {
 
 // HandleChainTipResponse handles an incoming chain tip response from another node
 func (sm *SyncManager) HandleChainTipResponse(response *ChainTipResponse) error {
-	// Validate response
-	if response.ChainTip < 0 {
+	// Validate response - accept -1 as valid (no blocks yet)
+	if response.ChainTip < -1 {
 		return fmt.Errorf("invalid chain tip in response: %d", response.ChainTip)
 	}
 
@@ -687,4 +687,12 @@ func (sm *SyncManager) GetSyncStatus() map[string]interface{} {
 	status["chain_tip_query_timeout"] = sm.chainTipQueryTimeout.Seconds()
 
 	return status
+}
+
+// GetConnectedPeers returns the list of connected peer addresses
+func (sm *SyncManager) GetConnectedPeers() ([]string, error) {
+	if sm.peerQueryProvider == nil {
+		return []string{}, nil
+	}
+	return sm.peerQueryProvider()
 }
