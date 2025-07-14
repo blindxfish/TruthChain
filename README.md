@@ -90,17 +90,66 @@ go build -o truthchain_server cmd/main.go
 - **Wallet Management**: Create, import, backup, and restore wallets
 - **Bitcoin-style Restart**: No crashes, loads existing data automatically
 
+## 🔧 Recent Fixes & Improvements
+
+### Time-Based Block Generation ✅ **FIXED**
+- **Issue**: Time-based block generation was disabled, preventing proper block creation flow
+- **Fix**: Re-enabled `checkTimeBasedBlock()` method with proper conditions:
+  - Checks if 10+ minutes have passed since last block
+  - Ensures no pending posts exist
+  - Prevents duplicate requests or proposals
+  - Requests approval from all active peers before block creation
+
+### Consensus Protocol Integration ✅ **FIXED**
+- **Issue**: Time-based blocks were bypassing the consensus protocol
+- **Fix**: Removed legacy time-based block creation logic that bypassed consensus
+- **Result**: All blocks now properly go through the consensus protocol with peer approval
+
+### Peer Counting Logic ✅ **FIXED**
+- **Issue**: Nodes incorrectly counted themselves as peers, causing vote count mismatches
+- **Fix**: Updated peer counting logic to:
+  - Count the node itself as a voter (not as a peer)
+  - Use sync manager's peer query provider for accurate peer counts
+  - Ensure proper vote approval thresholds
+
+### Mutex Locking Issues ✅ **FIXED**
+- **Issue**: "sync: Unlock of unlocked RWMutex" crashes in `RequestTimeBasedBlock()`
+- **Fix**: Corrected mutex locking/unlocking sequence to prevent double unlocks
+- **Result**: Stable block request handling without crashes
+
+### Chain Tip Validation ✅ **FIXED**
+- **Issue**: Fresh nodes with chain tip -1 were rejected during synchronization
+- **Fix**: Updated chain tip validation to accept -1 as valid for new nodes
+- **Result**: New nodes can properly sync with the network from genesis
+
+### Message Parsing Robustness ✅ **FIXED**
+- **Issue**: JSON unmarshaling errors with "invalid character 'P' after top-level value"
+- **Fix**: Enhanced mesh manager message processing to:
+  - Parse multiple JSON objects from single TCP reads
+  - Handle string escapes and partial messages properly
+  - Prevent JSON parsing errors from concatenated messages
+
+### Time Synchronization ✅ **FIXED**
+- **Issue**: Race conditions between block builder's internal time and blockchain state
+- **Fix**: Modified `BuildTimeBasedBlock` to accept actual latest block timestamp
+- **Result**: Consistent time checks across the system, preventing premature block requests
+
+### Network Stability ✅ **IMPROVED**
+- **Issue**: Crashes in `handleGossipMessage` due to nil pointer dereferences
+- **Fix**: Added comprehensive nil checks for `msg.Source` in all message handlers
+- **Result**: Robust message handling without crashes
+
 ### 🔄 **IN PROGRESS / PARTIALLY IMPLEMENTED**
 
 #### Consensus Protocol
-- **Block Creation Flow**: The consensus protocol is implemented but time-based blocks were bypassing it (now fixed)
+- **Block Creation Flow**: The consensus protocol is implemented and time-based blocks now properly use it
 - **Post Threshold Enforcement**: System needs more posts to trigger proper consensus flow
 - **Trust Score Integration**: Trust scores exist but need better integration with block proposal logic
 
 #### Sync System
-- **Block Synchronization**: Basic sync exists but needs debugging for proper chain tip reporting
+- **Block Synchronization**: Basic sync exists and chain tip validation has been improved
 - **Peer Discovery**: Working but could be more robust
-- **Network Resilience**: Basic fault tolerance implemented
+- **Network Resilience**: Basic fault tolerance implemented with improved stability
 
 ### ❌ **NOT YET IMPLEMENTED**
 
