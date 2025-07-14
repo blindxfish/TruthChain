@@ -11,6 +11,19 @@ import (
 	"time"
 )
 
+// ConnectionHistory tracks connection history for an IP address
+type ConnectionHistory struct {
+	IP              string // IP address (e.g., "192.168.1.100")
+	LastAddress     string // Last known address (IP:port)
+	FirstSeen       time.Time
+	LastSeen        time.Time
+	ConnectionCount int // Number of connections
+	DisconnectCount int // Number of disconnections
+	LastDisconnect  time.Time
+	TrustPenalty    float64 // Trust penalty for frequent disconnects
+	mu              sync.RWMutex
+}
+
 // MeshConnection represents an active connection to a mesh peer
 type MeshConnection struct {
 	Address     string
@@ -34,10 +47,19 @@ type MeshManager struct {
 	connChan chan ConnectionEvent
 	stopChan chan struct{}
 
+	// Connection history tracking
+	connectionHistory map[string]*ConnectionHistory // IP -> ConnectionHistory
+	historyMu         sync.RWMutex
+
 	// Configuration
 	selectionInterval time.Duration
 	pingInterval      time.Duration
 	connectionTimeout time.Duration
+
+	// Timeout and retry configuration
+	connectionRetryTimeout time.Duration
+	maxRetryAttempts       int
+	trustPenaltyDecay      time.Duration
 }
 
 // ConnectionEvent represents connection-related events
@@ -58,6 +80,7 @@ const (
 	ConnectionEventFailed
 	ConnectionEventLatencyUpdated
 	ConnectionEventTrustUpdated
+	ConnectionEventReconnected
 )
 
 // NewMeshManager creates a new mesh connection manager
@@ -68,10 +91,131 @@ func NewMeshManager(network *TrustNetwork) *MeshManager {
 		targetCount:       3, // Default: maintain 3 mesh connections
 		connChan:          make(chan ConnectionEvent, 100),
 		stopChan:          make(chan struct{}),
+		connectionHistory: make(map[string]*ConnectionHistory),
 		selectionInterval: 30 * time.Second, // Re-select peers every 30 seconds
 		pingInterval:      10 * time.Second, // Ping peers every 10 seconds
 		connectionTimeout: 5 * time.Second,  // Connection timeout
+
+		// New timeout and retry configuration
+		connectionRetryTimeout: 30 * time.Second, // Wait before retrying failed connections
+		maxRetryAttempts:       3,                // Maximum retry attempts for failed connections
+		trustPenaltyDecay:      24 * time.Hour,   // Trust penalty decays over 24 hours
 	}
+}
+
+// extractIP extracts the IP address from a full address (IP:port)
+func (mm *MeshManager) extractIP(address string) string {
+	if strings.Contains(address, ":") {
+		return strings.Split(address, ":")[0]
+	}
+	return address
+}
+
+// getConnectionHistory gets or creates connection history for an IP
+func (mm *MeshManager) getConnectionHistory(ip string) *ConnectionHistory {
+	mm.historyMu.Lock()
+	defer mm.historyMu.Unlock()
+
+	history, exists := mm.connectionHistory[ip]
+	if !exists {
+		history = &ConnectionHistory{
+			IP:              ip,
+			FirstSeen:       time.Now(),
+			LastSeen:        time.Now(),
+			ConnectionCount: 0,
+			DisconnectCount: 0,
+			TrustPenalty:    0.0,
+		}
+		mm.connectionHistory[ip] = history
+	}
+	return history
+}
+
+// updateConnectionHistory updates connection history when a peer connects
+func (mm *MeshManager) updateConnectionHistory(address string) {
+	ip := mm.extractIP(address)
+	history := mm.getConnectionHistory(ip)
+
+	history.mu.Lock()
+	defer history.mu.Unlock()
+
+	// Check if this is a reconnection (same IP, different port)
+	if history.LastAddress != "" && history.LastAddress != address {
+		log.Printf("Peer reconnected: %s -> %s (IP: %s)", history.LastAddress, address, ip)
+		// Remove old connection if it exists
+		mm.dropConnection(history.LastAddress)
+	}
+
+	history.LastAddress = address
+	history.LastSeen = time.Now()
+	history.ConnectionCount++
+}
+
+// updateDisconnectHistory updates connection history when a peer disconnects
+func (mm *MeshManager) updateDisconnectHistory(address string) {
+	ip := mm.extractIP(address)
+	history := mm.getConnectionHistory(ip)
+
+	history.mu.Lock()
+	defer history.mu.Unlock()
+
+	history.DisconnectCount++
+	history.LastDisconnect = time.Now()
+
+	// Calculate trust penalty based on disconnect frequency
+	timeSinceFirst := time.Since(history.FirstSeen)
+	disconnectRate := float64(history.DisconnectCount) / timeSinceFirst.Hours()
+
+	// Apply trust penalty for high disconnect rates
+	if disconnectRate > 1.0 { // More than 1 disconnect per hour
+		history.TrustPenalty = 0.2 // 20% trust penalty
+	} else if disconnectRate > 0.5 { // More than 1 disconnect per 2 hours
+		history.TrustPenalty = 0.1 // 10% trust penalty
+	}
+
+	log.Printf("Peer disconnected: %s (IP: %s, disconnect rate: %.2f/hour, trust penalty: %.2f)",
+		address, ip, disconnectRate, history.TrustPenalty)
+}
+
+// getTrustPenalty returns the current trust penalty for an IP
+func (mm *MeshManager) getTrustPenalty(ip string) float64 {
+	history := mm.getConnectionHistory(ip)
+
+	history.mu.RLock()
+	defer history.mu.RUnlock()
+
+	// Decay trust penalty over time
+	timeSinceDisconnect := time.Since(history.LastDisconnect)
+	if timeSinceDisconnect > mm.trustPenaltyDecay {
+		return 0.0 // Penalty has decayed
+	}
+
+	// Linear decay
+	decayFactor := 1.0 - (timeSinceDisconnect.Hours() / mm.trustPenaltyDecay.Hours())
+	if decayFactor < 0 {
+		decayFactor = 0
+	}
+
+	return history.TrustPenalty * decayFactor
+}
+
+// isConnectionBlocked checks if a connection should be blocked due to recent failures
+func (mm *MeshManager) isConnectionBlocked(address string) bool {
+	ip := mm.extractIP(address)
+	history := mm.getConnectionHistory(ip)
+
+	history.mu.RLock()
+	defer history.mu.RUnlock()
+
+	// Block if too many recent disconnections
+	timeSinceDisconnect := time.Since(history.LastDisconnect)
+	if timeSinceDisconnect < mm.connectionRetryTimeout && history.DisconnectCount > mm.maxRetryAttempts {
+		log.Printf("Connection blocked to %s (IP: %s): %d disconnections in last %v",
+			address, ip, history.DisconnectCount, mm.connectionRetryTimeout)
+		return true
+	}
+
+	return false
 }
 
 // Start begins the mesh connection management
@@ -82,6 +226,7 @@ func (mm *MeshManager) Start() error {
 	go mm.connectionSelector()
 	go mm.connectionManager()
 	go mm.pingManager()
+	go mm.connectionHistoryCleaner()
 
 	return nil
 }
@@ -102,6 +247,41 @@ func (mm *MeshManager) Stop() error {
 	mm.mu.Unlock()
 
 	return nil
+}
+
+// connectionHistoryCleaner periodically cleans up old connection history
+func (mm *MeshManager) connectionHistoryCleaner() {
+	ticker := time.NewTicker(1 * time.Hour) // Clean every hour
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ticker.C:
+			mm.cleanupConnectionHistory()
+		case <-mm.stopChan:
+			return
+		}
+	}
+}
+
+// cleanupConnectionHistory removes old connection history entries
+func (mm *MeshManager) cleanupConnectionHistory() {
+	mm.historyMu.Lock()
+	defer mm.historyMu.Unlock()
+
+	cutoff := time.Now().Add(-7 * 24 * time.Hour) // Keep 7 days of history
+	removed := 0
+
+	for ip, history := range mm.connectionHistory {
+		if history.LastSeen.Before(cutoff) {
+			delete(mm.connectionHistory, ip)
+			removed++
+		}
+	}
+
+	if removed > 0 {
+		log.Printf("Cleaned up %d old connection history entries", removed)
+	}
 }
 
 // connectionSelector periodically selects and maintains mesh connections
@@ -137,9 +317,12 @@ func (mm *MeshManager) selectAndMaintainConnections() {
 	for _, peer := range selectedPeers {
 		selectedAddresses[peer.Address] = true
 
-		// If not currently connected, establish connection
-		if !currentConnections[peer.Address] {
+		// If not currently connected and not blocked, establish connection
+		if !currentConnections[peer.Address] && !mm.isConnectionBlocked(peer.Address) {
+			log.Printf("Selected peer for connection: %s (trust: %.2f)", peer.Address, peer.TrustScore)
 			go mm.establishConnection(peer.Address)
+		} else if mm.isConnectionBlocked(peer.Address) {
+			log.Printf("Peer blocked from connection: %s (recent failures)", peer.Address)
 		}
 	}
 
@@ -163,6 +346,12 @@ func (mm *MeshManager) establishConnection(address string) {
 		return
 	}
 	mm.mu.RUnlock()
+
+	// Check if connection is blocked
+	if mm.isConnectionBlocked(address) {
+		log.Printf("Connection blocked to %s due to recent failures", address)
+		return
+	}
 
 	// Establish TCP connection
 	conn, err := net.DialTimeout("tcp", address, mm.connectionTimeout)
@@ -200,6 +389,9 @@ func (mm *MeshManager) establishConnection(address string) {
 		return
 	}
 	// --- End handshake ---
+
+	// Update connection history
+	mm.updateConnectionHistory(address)
 
 	// Create mesh connection
 	meshConn := &MeshConnection{
@@ -256,6 +448,9 @@ func (mm *MeshManager) dropConnection(address string) {
 	mm.mu.Unlock()
 
 	if exists {
+		// Update connection history
+		mm.updateDisconnectHistory(address)
+
 		// Update peer table
 		mm.network.PeerTable.MarkDisconnected(address)
 
@@ -486,6 +681,8 @@ func (mm *MeshManager) handleConnectionEvent(event ConnectionEvent) {
 		log.Printf("Mesh peer latency updated: %s (%v)", event.Address, event.Latency)
 	case ConnectionEventTrustUpdated:
 		log.Printf("Mesh peer trust updated: %s (%.2f)", event.Address, event.Conn.TrustScore)
+	case ConnectionEventReconnected:
+		log.Printf("Mesh peer reconnected: %s", event.Address)
 	}
 }
 
@@ -601,6 +798,9 @@ func (mm *MeshManager) AcceptInboundConnection(conn net.Conn, remoteAddr string)
 	}
 	// --- End handshake ---
 
+	// Update connection history (this will handle reconnections)
+	mm.updateConnectionHistory(remoteAddr)
+
 	log.Printf("Accepting inbound connection from: %s", remoteAddr)
 
 	// Create mesh connection
@@ -685,9 +885,34 @@ func (mm *MeshManager) SendMessageToPeer(peerID string, message []byte) error {
 func (mm *MeshManager) GetStats() map[string]interface{} {
 	mm.mu.RLock()
 	defer mm.mu.RUnlock()
+
+	// Get connection history stats
+	mm.historyMu.RLock()
+	historyStats := map[string]interface{}{
+		"total_ips_tracked":    len(mm.connectionHistory),
+		"connection_histories": make([]map[string]interface{}, 0),
+	}
+
+	for ip, history := range mm.connectionHistory {
+		history.mu.RLock()
+		historyStats["connection_histories"] = append(historyStats["connection_histories"].([]map[string]interface{}), map[string]interface{}{
+			"ip":               ip,
+			"last_address":     history.LastAddress,
+			"connection_count": history.ConnectionCount,
+			"disconnect_count": history.DisconnectCount,
+			"trust_penalty":    history.TrustPenalty,
+			"first_seen":       history.FirstSeen,
+			"last_seen":        history.LastSeen,
+			"last_disconnect":  history.LastDisconnect,
+		})
+		history.mu.RUnlock()
+	}
+	mm.historyMu.RUnlock()
+
 	return map[string]interface{}{
-		"connection_count": len(mm.connections),
-		"target_count":     mm.targetCount,
+		"connection_count":   len(mm.connections),
+		"target_count":       mm.targetCount,
+		"connection_history": historyStats,
 	}
 }
 
@@ -723,4 +948,40 @@ func (mm *MeshManager) IsPeerConnected(peerID string) bool {
 	defer mm.mu.RUnlock()
 	conn, exists := mm.connections[peerID]
 	return exists && conn.IsConnected
+}
+
+// GetConnectionHistory returns connection history for a specific IP
+func (mm *MeshManager) GetConnectionHistory(ip string) *ConnectionHistory {
+	mm.historyMu.RLock()
+	defer mm.historyMu.RUnlock()
+	return mm.connectionHistory[ip]
+}
+
+// GetConnectionHistoryStats returns summary statistics about connection history
+func (mm *MeshManager) GetConnectionHistoryStats() map[string]interface{} {
+	mm.historyMu.RLock()
+	defer mm.historyMu.RUnlock()
+
+	totalIPs := len(mm.connectionHistory)
+	totalConnections := 0
+	totalDisconnections := 0
+	ipsWithPenalties := 0
+
+	for _, history := range mm.connectionHistory {
+		history.mu.RLock()
+		totalConnections += history.ConnectionCount
+		totalDisconnections += history.DisconnectCount
+		if history.TrustPenalty > 0 {
+			ipsWithPenalties++
+		}
+		history.mu.RUnlock()
+	}
+
+	return map[string]interface{}{
+		"total_ips_tracked":      totalIPs,
+		"total_connections":      totalConnections,
+		"total_disconnections":   totalDisconnections,
+		"ips_with_penalties":     ipsWithPenalties,
+		"avg_connections_per_ip": float64(totalConnections) / float64(totalIPs),
+	}
 }
