@@ -62,10 +62,12 @@ var (
 
 // NewBoltDBStorage creates a new BoltDB storage instance
 func NewBoltDBStorage(dbPath string) (*BoltDBStorage, error) {
-	// Open database
-	db, err := bbolt.Open(dbPath, 0600, nil)
+	// Open database. A Timeout is required: bbolt takes an exclusive file lock,
+	// and with no timeout a second opener (e.g. running the api_server against a
+	// DB the node already holds) blocks forever with no error. Fail fast instead.
+	db, err := bbolt.Open(dbPath, 0600, &bbolt.Options{Timeout: 5 * time.Second})
 	if err != nil {
-		return nil, fmt.Errorf("failed to open database: %w", err)
+		return nil, fmt.Errorf("failed to open database (is another TruthChain process using %s?): %w", dbPath, err)
 	}
 
 	storage := &BoltDBStorage{

@@ -22,8 +22,8 @@ type Blockchain struct {
 	TransferPool  *chain.TransferPool `json:"transfer_pool"`
 	PostThreshold int                 `json:"post_threshold"` // Number of posts needed to create a block
 	TimeInterval  time.Duration       `json:"time_interval"`  // Time interval for block creation (10 minutes)
-	lastBlockTime time.Time           `json:"last_block_time"`
-	mu            sync.RWMutex        `json:"-"`
+	lastBlockTime time.Time
+	mu            sync.RWMutex
 }
 
 // Ensure Blockchain implements chain.BlockchainInterface
@@ -240,8 +240,13 @@ func (bc *Blockchain) CreatePost(content string, w *wallet.Wallet) (*chain.Post,
 		return nil, fmt.Errorf("post content cannot be empty")
 	}
 
+	// Capture the timestamp once: it must be identical in the signed data and in
+	// the stored Post, otherwise the signature (which commits to the timestamp)
+	// will not verify. Two separate time.Now() calls could straddle a second.
+	timestamp := time.Now().Unix()
+
 	// Create post data
-	postData := fmt.Sprintf("%s%s%d", w.GetAddress(), content, time.Now().Unix())
+	postData := fmt.Sprintf("%s%s%d", w.GetAddress(), content, timestamp)
 
 	// Sign the post data
 	signature, err := w.Sign([]byte(postData))
@@ -254,7 +259,7 @@ func (bc *Blockchain) CreatePost(content string, w *wallet.Wallet) (*chain.Post,
 		Author:    w.GetAddress(),
 		Signature: hex.EncodeToString(signature),
 		Content:   content,
-		Timestamp: time.Now().Unix(),
+		Timestamp: timestamp,
 	}
 
 	// Set hash

@@ -173,8 +173,14 @@ func (t *Transfer) Validate() error {
 		return fmt.Errorf("recipient address cannot be empty")
 	}
 
-	if t.Amount <= 0 {
-		return fmt.Errorf("transfer amount must be positive")
+	if t.Amount < MinTransferAmount {
+		return fmt.Errorf("transfer amount must be at least %d character(s)", MinTransferAmount)
+	}
+
+	// Enforce an upper bound so Amount+GasFee cannot overflow a 64-bit int and
+	// invert the balance checks in state validation (integer-overflow minting).
+	if t.Amount > MaxTransferAmount {
+		return fmt.Errorf("transfer amount %d exceeds maximum of %d", t.Amount, MaxTransferAmount)
 	}
 
 	if t.GasFee != 1 {

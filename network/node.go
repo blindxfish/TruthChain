@@ -335,9 +335,10 @@ func (tn *TrustNetwork) GetNetworkStats() map[string]interface{} {
 		"max_age":       tn.TrustEngine.MaxAge,
 	}
 
-	// Add peer details
-	peers := make([]map[string]interface{}, 0, len(tn.Topology.Peers))
-	for _, peer := range tn.Topology.Peers {
+	// Add peer details (snapshot to avoid racing topology mutation)
+	topologyPeers := tn.Topology.SnapshotPeers()
+	peers := make([]map[string]interface{}, 0, len(topologyPeers))
+	for _, peer := range topologyPeers {
 		peerInfo := map[string]interface{}{
 			"address":        peer.Address,
 			"trust_score":    peer.TrustScore,
@@ -520,9 +521,15 @@ func (tn *TrustNetwork) handlePostMessage(msg NetworkMessage) {
 	tn.recentMsgHashes[hash] = time.Now().Unix()
 	tn.mu.Unlock()
 
-	// Validate post (signature, etc)
+	// Validate post structure
 	if err := post.ValidatePost(); err != nil {
 		log.Printf("Invalid post received: %v", err)
+		return
+	}
+	// Verify authorship: the signature must be produced by the private key of
+	// the claimed Author. Without this, gossiped posts are forgeable.
+	if err := post.VerifySignature(); err != nil {
+		log.Printf("Rejected post with invalid signature from %s: %v", msg.Source, err)
 		return
 	}
 	// Add to pending posts (if not present)
@@ -558,12 +565,14 @@ func (tn *TrustNetwork) handleTransferMessage(msg NetworkMessage) {
 	if tn.transferSeen[transfer.Hash] {
 		return // Already seen
 	}
-	tn.transferSeen[transfer.Hash] = true
-	// Validate transfer
+	// Validate transfer (Transfer.Validate also verifies the ECDSA signature)
+	// BEFORE recording the hash, so a flood of invalid transfers with unique
+	// hashes cannot grow the dedup map without bound.
 	if err := transfer.Validate(); err != nil {
 		log.Printf("Invalid transfer received: %v", err)
 		return
 	}
+	tn.transferSeen[transfer.Hash] = true
 	// Add to transfer pool (if not present)
 	if err := tn.Blockchain.AddTransfer(*transfer); err != nil {
 		log.Printf("Failed to add transfer to pool: %v", err)
@@ -643,7 +652,7 @@ func (tn *TrustNetwork) updateTrustScores() {
 	tn.mu.Lock()
 	defer tn.mu.Unlock()
 
-	for _, peer := range tn.Topology.Peers {
+	for _, peer := range tn.Topology.SnapshotPeers() {
 		// Update trust score
 		oldTrust := peer.TrustScore
 		tn.TrustEngine.CalculateTrustScore(peer)

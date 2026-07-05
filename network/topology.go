@@ -1,17 +1,25 @@
 package network
 
 import (
+	"sync"
 	"time"
 )
 
-// NetworkTopology manages the network's logical topology and routing
+// NetworkTopology manages the network's logical topology and routing.
+//
+// All access to the Peers and RouteTable maps must go through the methods
+// below, which hold mu. These maps are read and written concurrently from the
+// connection manager, ping loop, gossip loop and trust loop; unsynchronized
+// access previously caused "concurrent map writes" runtime panics under normal
+// multi-peer operation.
 type NetworkTopology struct {
 	NodeID         string                // This node's identifier
-	Peers          map[string]*Peer      // Direct peer connections
-	RouteTable     map[string]*PeerRoute // Routing table for all known nodes
+	Peers          map[string]*Peer      // Direct peer connections (guard with mu)
+	RouteTable     map[string]*PeerRoute // Routing table for all known nodes (guard with mu)
 	GossipInterval time.Duration         // How often to send gossip messages
 	MaxHops        int                   // Maximum hop distance to track
 	LastGossip     int64                 // Timestamp of last gossip
+	mu             sync.RWMutex          // Protects Peers and RouteTable
 }
 
 // PeerRoute represents a route to a peer in the network
@@ -56,6 +64,9 @@ func NewNetworkTopology(nodeID string) *NetworkTopology {
 
 // AddPeer adds a direct peer connection
 func (nt *NetworkTopology) AddPeer(peer *Peer) {
+	nt.mu.Lock()
+	defer nt.mu.Unlock()
+
 	nt.Peers[peer.Address] = peer
 
 	// Add direct route (hop distance 0)
@@ -71,6 +82,9 @@ func (nt *NetworkTopology) AddPeer(peer *Peer) {
 
 // RemovePeer removes a direct peer connection
 func (nt *NetworkTopology) RemovePeer(address string) {
+	nt.mu.Lock()
+	defer nt.mu.Unlock()
+
 	delete(nt.Peers, address)
 
 	// Remove direct route
@@ -86,6 +100,9 @@ func (nt *NetworkTopology) RemovePeer(address string) {
 
 // UpdateRoute updates or adds a route in the routing table
 func (nt *NetworkTopology) UpdateRoute(route *PeerRoute) bool {
+	nt.mu.Lock()
+	defer nt.mu.Unlock()
+
 	existing, exists := nt.RouteTable[route.Address]
 
 	// Don't update if we have a better route (lower hop count)
@@ -100,6 +117,8 @@ func (nt *NetworkTopology) UpdateRoute(route *PeerRoute) bool {
 
 // GetRoute returns the best route to a destination
 func (nt *NetworkTopology) GetRoute(destination string) *PeerRoute {
+	nt.mu.RLock()
+	defer nt.mu.RUnlock()
 	return nt.RouteTable[destination]
 }
 
@@ -114,6 +133,9 @@ func (nt *NetworkTopology) GetHopDistance(destination string) int {
 
 // CreateGossipMessage creates a gossip message with current peer information
 func (nt *NetworkTopology) CreateGossipMessage() *GossipMessage {
+	nt.mu.RLock()
+	defer nt.mu.RUnlock()
+
 	peers := make([]PeerInfo, 0, len(nt.RouteTable))
 
 	for address, route := range nt.RouteTable {
@@ -179,6 +201,36 @@ func (nt *NetworkTopology) ProcessGossipMessage(msg *GossipMessage) int {
 	return updatedRoutes
 }
 
+// SnapshotPeers returns a copy of the current direct-peer slice. The slice is
+// safe to range over concurrently with topology mutation; the *Peer elements
+// themselves are shared and should be treated as read-mostly.
+func (nt *NetworkTopology) SnapshotPeers() []*Peer {
+	nt.mu.RLock()
+	defer nt.mu.RUnlock()
+
+	peers := make([]*Peer, 0, len(nt.Peers))
+	for _, peer := range nt.Peers {
+		peers = append(peers, peer)
+	}
+	return peers
+}
+
+// GetPeer returns the direct peer for an address, if connected.
+func (nt *NetworkTopology) GetPeer(address string) (*Peer, bool) {
+	nt.mu.RLock()
+	defer nt.mu.RUnlock()
+
+	peer, exists := nt.Peers[address]
+	return peer, exists
+}
+
+// PeerCount returns the number of direct peers.
+func (nt *NetworkTopology) PeerCount() int {
+	nt.mu.RLock()
+	defer nt.mu.RUnlock()
+	return len(nt.Peers)
+}
+
 // SelectPeers implements the connection strategy from NetworkDesign.txt
 // Returns the best peers based on: nearest, most trusted, most distant
 func (nt *NetworkTopology) SelectPeers(count int) []*Peer {
@@ -186,11 +238,10 @@ func (nt *NetworkTopology) SelectPeers(count int) []*Peer {
 		return []*Peer{}
 	}
 
-	// Convert peers map to slice
-	peers := make([]*Peer, 0, len(nt.Peers))
-	for _, peer := range nt.Peers {
-		peers = append(peers, peer)
-	}
+	// Snapshot the peers map to a slice under the lock, then release it so the
+	// selection helpers (which call locked methods like GetHopDistance) do not
+	// re-enter the mutex.
+	peers := nt.SnapshotPeers()
 
 	if len(peers) <= count {
 		return peers
@@ -285,6 +336,9 @@ func (nt *NetworkTopology) getMostDistantPeer(peers []*Peer) *Peer {
 
 // GetNetworkStats returns statistics about the network topology
 func (nt *NetworkTopology) GetNetworkStats() map[string]interface{} {
+	nt.mu.RLock()
+	defer nt.mu.RUnlock()
+
 	totalPeers := len(nt.Peers)
 	totalRoutes := len(nt.RouteTable)
 
@@ -319,6 +373,9 @@ func (nt *NetworkTopology) GetNetworkStats() map[string]interface{} {
 
 // CleanupStaleRoutes removes routes that haven't been updated recently
 func (nt *NetworkTopology) CleanupStaleRoutes(maxAge time.Duration) int {
+	nt.mu.Lock()
+	defer nt.mu.Unlock()
+
 	removed := 0
 	cutoff := time.Now().Unix() - int64(maxAge.Seconds())
 

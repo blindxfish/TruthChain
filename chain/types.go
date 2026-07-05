@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"sort"
 	"time"
+
+	"github.com/blindxfish/truthchain/wallet"
 )
 
 // Post represents a user-submitted text post on the blockchain
@@ -168,6 +170,37 @@ func (p *Post) GetCharacterCount() int {
 	return len(p.Content)
 }
 
+// VerifySignature verifies that the post's signature was produced by the
+// private key corresponding to its Author address, and that the post hash
+// matches its contents. This is the authoritative authorship check and must be
+// run on every post ingested from an untrusted source (gossip or block sync).
+func (p *Post) VerifySignature() error {
+	if p.Signature == "" {
+		return fmt.Errorf("post has no signature")
+	}
+
+	// Bind the stored hash to the contents so Content/Author/Timestamp cannot be
+	// altered without invalidating the hash (and, below, the signature).
+	if p.Hash != p.CalculateHash() {
+		return fmt.Errorf("post hash mismatch")
+	}
+
+	message := fmt.Sprintf("%s%s%d", p.Author, p.Content, p.Timestamp)
+	hash := sha256.Sum256([]byte(message))
+	hashHex := hex.EncodeToString(hash[:])
+
+	recoveredPubKey, err := wallet.RecoverPublicKeyFromSignature(hashHex, p.Signature)
+	if err != nil {
+		return fmt.Errorf("post signature recovery failed: %w", err)
+	}
+
+	if wallet.DeriveAddress(recoveredPubKey) != p.Author {
+		return fmt.Errorf("post signature author mismatch")
+	}
+
+	return nil
+}
+
 // CalculateHash calculates the hash of a state root
 func (sr *StateRoot) CalculateHash() string {
 	// Sort wallets by address for deterministic hashing
@@ -269,10 +302,10 @@ func (b *Block) ValidateBlock() error {
 		return fmt.Errorf("block timestamp must be positive")
 	}
 	if b.PrevHash == "" && b.Index != 0 {
-		return fmt.Errorf("genesis block must have empty prev_hash")
+		return fmt.Errorf("non-genesis block must have prev_hash")
 	}
 	if b.PrevHash != "" && b.Index == 0 {
-		return fmt.Errorf("non-genesis block must have prev_hash")
+		return fmt.Errorf("genesis block must have empty prev_hash")
 	}
 
 	// Validate all posts in the block
@@ -318,6 +351,35 @@ func (b *Block) ValidateBlock() error {
 		return fmt.Errorf("block char_count mismatch: expected %d, got %d", calculatedCharCount, b.CharCount)
 	}
 
+	// Verify the block hash commits to the block contents. Without this the Hash
+	// field is attacker-controlled and provides no integrity for the chain.
+	if b.Hash != b.CalculateHash() {
+		return fmt.Errorf("block hash mismatch: stored %s, computed %s", b.Hash, b.CalculateHash())
+	}
+
+	return nil
+}
+
+// VerifySignatures verifies the cryptographic authorship of every post and
+// transfer contained in the block. It MUST be called on any block received from
+// an untrusted peer (block sync / gossip) in addition to ValidateBlock, which
+// only checks structure and the block hash. Callers building blocks from an
+// already-verified mempool may skip it.
+func (b *Block) VerifySignatures() error {
+	for i := range b.Posts {
+		if err := b.Posts[i].VerifySignature(); err != nil {
+			return fmt.Errorf("invalid post signature at index %d: %w", i, err)
+		}
+	}
+	for i := range b.Transfers {
+		ok, err := b.Transfers[i].VerifySignature()
+		if err != nil {
+			return fmt.Errorf("invalid transfer signature at index %d: %w", i, err)
+		}
+		if !ok {
+			return fmt.Errorf("invalid transfer signature at index %d", i)
+		}
+	}
 	return nil
 }
 
@@ -366,10 +428,10 @@ func (b *Block) ValidateBlockRelaxed() error {
 		return fmt.Errorf("block timestamp must be positive")
 	}
 	if b.PrevHash == "" && b.Index != 0 {
-		return fmt.Errorf("genesis block must have empty prev_hash")
+		return fmt.Errorf("non-genesis block must have prev_hash")
 	}
 	if b.PrevHash != "" && b.Index == 0 {
-		return fmt.Errorf("non-genesis block must have prev_hash")
+		return fmt.Errorf("genesis block must have empty prev_hash")
 	}
 
 	// Validate all posts in the block
@@ -410,6 +472,12 @@ func (b *Block) ValidateBlockRelaxed() error {
 	}
 	if calculatedCharCount != b.CharCount {
 		return fmt.Errorf("block char_count mismatch: expected %d, got %d", calculatedCharCount, b.CharCount)
+	}
+
+	// Verify the block hash commits to the block contents even on the relaxed
+	// (initial-sync) path — the hash is the chain's only integrity anchor.
+	if b.Hash != b.CalculateHash() {
+		return fmt.Errorf("block hash mismatch: stored %s, computed %s", b.Hash, b.CalculateHash())
 	}
 
 	return nil

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"os/exec"
@@ -61,7 +62,10 @@ type NodeConfig struct {
 	Domain            string
 	WalletPath        string
 	ImportWallet      bool
-	PrivateKey        string
+	// PrivateKey is only used transiently during interactive wallet import. It is
+	// never serialized to truthchain-config.json (json:"-") — the key lives in
+	// the 0600 wallet file, not in the config.
+	PrivateKey        string `json:"-"`
 	ConfigureFirewall bool
 }
 
@@ -78,6 +82,17 @@ func clearScreen() {
 func getLocalIP() string {
 	// For now, return localhost - in production this would detect the actual IP
 	return "127.0.0.1"
+}
+
+// isLoopbackRequest reports whether the HTTP request originated from the local
+// machine. Used to gate sensitive endpoints (e.g. private-key wallet backup).
+func isLoopbackRequest(r *http.Request) bool {
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		host = r.RemoteAddr
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
 }
 
 // checkForExistingData checks if there's existing TruthChain data and loads configuration
@@ -143,7 +158,7 @@ func saveConfig(config *NodeConfig) error {
 	}
 
 	configPath := "truthchain-config.json"
-	if err := os.WriteFile(configPath, data, 0644); err != nil {
+	if err := os.WriteFile(configPath, data, 0600); err != nil {
 		return fmt.Errorf("failed to write config file: %w", err)
 	}
 
@@ -703,9 +718,12 @@ func NewTruthChainNode(config *NodeConfig) (*TruthChainNode, error) {
 	// Create router for API
 	router := mux.NewRouter()
 
-	// Create API server
+	// Create API server. Bind to loopback only: the API exposes wallet
+	// operations (post/transfer signing with the node's own key, wallet backup)
+	// and has no authentication, so it must never be reachable off-host. Front
+	// it with an authenticating reverse proxy if remote access is required.
 	apiServer := &http.Server{
-		Addr:         fmt.Sprintf(":%d", config.APIPort),
+		Addr:         fmt.Sprintf("127.0.0.1:%d", config.APIPort),
 		Handler:      router,
 		ReadTimeout:  30 * time.Second,
 		WriteTimeout: 30 * time.Second,
@@ -1154,6 +1172,10 @@ func (n *TruthChainNode) handleChainLength(w http.ResponseWriter, r *http.Reques
 }
 
 func (n *TruthChainNode) handleCreatePost(w http.ResponseWriter, r *http.Request) {
+	// Cap the request body so an oversized post cannot exhaust node memory. The
+	// on-chain per-post limit is 10KB (chain.MaxPostSize); allow modest slack.
+	r.Body = http.MaxBytesReader(w, r.Body, 64*1024)
+
 	var req struct {
 		Content string `json:"content"`
 	}
@@ -1180,6 +1202,9 @@ func (n *TruthChainNode) handleGetPendingPosts(w http.ResponseWriter, r *http.Re
 }
 
 func (n *TruthChainNode) handleCreateTransfer(w http.ResponseWriter, r *http.Request) {
+	// Cap the request body — a transfer request is a few small fields.
+	r.Body = http.MaxBytesReader(w, r.Body, 8*1024)
+
 	var req struct {
 		To     string `json:"to"`
 		Amount int    `json:"amount"`
@@ -1249,6 +1274,13 @@ func (n *TruthChainNode) handleGetBalance(w http.ResponseWriter, r *http.Request
 }
 
 func (n *TruthChainNode) handleWalletBackup(w http.ResponseWriter, r *http.Request) {
+	// This endpoint returns private key material. Refuse it for any non-loopback
+	// caller even if the listener is somehow exposed (e.g. via a proxy).
+	if !isLoopbackRequest(r) {
+		http.Error(w, "Forbidden: wallet backup is only available locally", http.StatusForbidden)
+		return
+	}
+
 	vars := mux.Vars(r)
 	address := vars["address"]
 

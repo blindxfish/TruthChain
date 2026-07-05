@@ -129,13 +129,14 @@ func TestSyncManagerValidateAndIntegrateBlock(t *testing.T) {
 
 	syncManager := NewSyncManager(blockchain, "test-node", config)
 
-	// Test with valid block
+	// Test with valid block. Genesis (index 0) must have an empty prev_hash
+	// per Block.ValidateBlock, and its Hash must commit to its contents.
 	block := &Block{
 		Index:     0,
-		Hash:      "genesis",
-		PrevHash:  "0000000000000000000000000000000000000000000000000000000000000000",
+		PrevHash:  "",
 		Timestamp: time.Now().Unix(),
 	}
+	block.SetHash()
 
 	if err := syncManager.validateAndIntegrateBlock(block); err != nil {
 		t.Fatalf("Failed to validate and integrate block: %v", err)
@@ -149,8 +150,8 @@ func TestSyncManagerValidateAndIntegrateBlock(t *testing.T) {
 	if savedBlock == nil {
 		t.Fatal("Block should have been saved")
 	}
-	if savedBlock.Hash != "genesis" {
-		t.Errorf("Expected hash 'genesis', got '%s'", savedBlock.Hash)
+	if savedBlock.Hash != block.Hash {
+		t.Errorf("Expected hash '%s', got '%s'", block.Hash, savedBlock.Hash)
 	}
 }
 
@@ -206,6 +207,16 @@ func TestSyncManagerRequestResponseFlow(t *testing.T) {
 
 	syncManager := NewSyncManager(blockchain, "test-node", config)
 
+	// A block request is delivered to the network via the onBlockRequest
+	// callback; for this test it can be a no-op since the response is injected
+	// directly through HandleBlockResponse below.
+	syncManager.SetNetworkCallbacks(
+		func(*BlockRequest) error { return nil },
+		func(*BlockResponse) error { return nil },
+		func(*ChainTipQuery) error { return nil },
+		func(*ChainTipResponse) error { return nil },
+	)
+
 	// Start the sync manager
 	if err := syncManager.Start(); err != nil {
 		t.Fatalf("Failed to start sync manager: %v", err)
@@ -256,6 +267,15 @@ func TestSyncManagerRequestTimeout(t *testing.T) {
 	config := DefaultConsensusConfig()
 
 	syncManager := NewSyncManager(blockchain, "test-node", config)
+
+	// Provide a no-op request callback so requestBlock reaches the wait/timeout
+	// path rather than failing because no network callback is configured.
+	syncManager.SetNetworkCallbacks(
+		func(*BlockRequest) error { return nil },
+		func(*BlockResponse) error { return nil },
+		func(*ChainTipQuery) error { return nil },
+		func(*ChainTipResponse) error { return nil },
+	)
 
 	// Start the sync manager
 	if err := syncManager.Start(); err != nil {

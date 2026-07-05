@@ -739,7 +739,7 @@ func (mm *MeshManager) pingPeer(peer *MeshConnection) {
 	mm.network.PeerTable.UpdatePeerLatency(peer.Address, latency.Milliseconds())
 
 	// Update topology peer latency
-	if topologyPeer, exists := mm.network.Topology.Peers[peer.Address]; exists {
+	if topologyPeer, exists := mm.network.Topology.GetPeer(peer.Address); exists {
 		topologyPeer.Latency = int(latency.Milliseconds())
 		topologyPeer.LastSeen = time.Now().Unix()
 	}

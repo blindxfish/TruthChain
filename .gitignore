@@ -6,6 +6,10 @@
 *.dylib
 truthchain
 truthchain.exe
+truthchain_server
+api_server
+releases/*/truthchain-linux
+releases/*/truthchain-windows*
 deploy/
 
 # Database files

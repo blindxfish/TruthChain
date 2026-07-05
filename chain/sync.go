@@ -276,6 +276,7 @@ func (sm *SyncManager) queryPeerChainTips() (int, error) {
 
 	timeout := time.After(sm.chainTipQueryTimeout)
 
+waitLoop:
 	for {
 		select {
 		case response := <-responses:
@@ -301,7 +302,7 @@ func (sm *SyncManager) queryPeerChainTips() (int, error) {
 				return highestTip, nil
 			}
 			log.Printf("[SyncManager] Timeout waiting for chain tip responses")
-			break
+			break waitLoop
 		case <-sm.stopChan:
 			return 0, fmt.Errorf("sync interrupted during chain tip query")
 		}
@@ -450,6 +451,12 @@ func (sm *SyncManager) validateAndIntegrateBlock(block *Block) error {
 	// Validate block structure
 	if err := block.ValidateBlock(); err != nil {
 		return fmt.Errorf("invalid block structure: %w", err)
+	}
+
+	// Verify authorship of every post/transfer in the block. Blocks arrive from
+	// untrusted peers during sync, so structure alone is not sufficient.
+	if err := block.VerifySignatures(); err != nil {
+		return fmt.Errorf("block signature verification failed: %w", err)
 	}
 
 	// Check if block already exists
