@@ -868,12 +868,16 @@ func (n *TruthChainNode) setupAPIRoutes() {
 	n.router.HandleFunc("/blockchain/latest", n.handleLatestBlock).Methods("GET")
 	n.router.HandleFunc("/blockchain/length", n.handleChainLength).Methods("GET")
 
-	// Post endpoints
-	n.router.HandleFunc("/posts", n.handleCreatePost).Methods("POST")
+	// Post endpoints. POST /posts takes a client-signed post; /local/posts is a
+	// loopback-only convenience that signs with the node's own wallet.
+	n.router.HandleFunc("/posts", n.handleSubmitPost).Methods("POST")
+	n.router.HandleFunc("/local/posts", n.handleLocalCreatePost).Methods("POST")
 	n.router.HandleFunc("/posts/pending", n.handleGetPendingPosts).Methods("GET")
 
-	// Transfer endpoints
-	n.router.HandleFunc("/transfers", n.handleCreateTransfer).Methods("POST")
+	// Transfer endpoints. POST /transfers takes a client-signed transfer;
+	// /local/transfers is loopback-only and signs with the node's own wallet.
+	n.router.HandleFunc("/transfers", n.handleSubmitTransfer).Methods("POST")
+	n.router.HandleFunc("/local/transfers", n.handleLocalCreateTransfer).Methods("POST")
 	n.router.HandleFunc("/transfers/pending", n.handleGetPendingTransfers).Methods("GET")
 
 	// Wallet endpoints
@@ -1171,15 +1175,55 @@ func (n *TruthChainNode) handleChainLength(w http.ResponseWriter, r *http.Reques
 	json.NewEncoder(w).Encode(response)
 }
 
-func (n *TruthChainNode) handleCreatePost(w http.ResponseWriter, r *http.Request) {
+// handleSubmitPost accepts a CLIENT-SIGNED post. The caller (browser/wallet)
+// signs with its own key; the node only verifies, enqueues, and gossips it. The
+// node never signs on the caller's behalf, so this endpoint is safe to expose
+// and cannot spend the operator's balance.
+func (n *TruthChainNode) handleSubmitPost(w http.ResponseWriter, r *http.Request) {
 	// Cap the request body so an oversized post cannot exhaust node memory. The
 	// on-chain per-post limit is 10KB (chain.MaxPostSize); allow modest slack.
+	r.Body = http.MaxBytesReader(w, r.Body, 64*1024)
+
+	var post chain.Post
+	if err := json.NewDecoder(r.Body).Decode(&post); err != nil {
+		http.Error(w, "Invalid request body: expected a signed post {author, content, timestamp, signature}", http.StatusBadRequest)
+		return
+	}
+
+	// AddPost validates structure, verifies the signature against the author,
+	// checks balance, dedups, persists, and enqueues. A bad/forged signature is
+	// rejected here.
+	if err := n.blockchain.AddPost(post); err != nil {
+		http.Error(w, fmt.Sprintf("Rejected post: %v", err), http.StatusBadRequest)
+		return
+	}
+
+	// Gossip the accepted post to the mesh so the network can include it.
+	if post.Hash == "" {
+		post.SetHash()
+	}
+	if n.trustNetwork != nil {
+		_ = n.trustNetwork.BroadcastPost(&post)
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusCreated)
+	json.NewEncoder(w).Encode(post)
+}
+
+// handleLocalCreatePost is a loopback-only convenience endpoint that signs a
+// post with the NODE's own wallet. It exists so the operator can post from local
+// tooling without a separate wallet client; it is refused for any remote caller.
+func (n *TruthChainNode) handleLocalCreatePost(w http.ResponseWriter, r *http.Request) {
+	if !isLoopbackRequest(r) {
+		http.Error(w, "Forbidden: local signing is only available on loopback; sign client-side and use POST /posts", http.StatusForbidden)
+		return
+	}
 	r.Body = http.MaxBytesReader(w, r.Body, 64*1024)
 
 	var req struct {
 		Content string `json:"content"`
 	}
-
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "Invalid request body", http.StatusBadRequest)
 		return
@@ -1190,8 +1234,16 @@ func (n *TruthChainNode) handleCreatePost(w http.ResponseWriter, r *http.Request
 		http.Error(w, fmt.Sprintf("Failed to create post: %v", err), http.StatusInternalServerError)
 		return
 	}
+	if err := n.blockchain.AddPost(*post); err != nil {
+		http.Error(w, fmt.Sprintf("Failed to enqueue post: %v", err), http.StatusInternalServerError)
+		return
+	}
+	if n.trustNetwork != nil {
+		_ = n.trustNetwork.BroadcastPost(post)
+	}
 
 	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusCreated)
 	json.NewEncoder(w).Encode(post)
 }
 
@@ -1201,15 +1253,48 @@ func (n *TruthChainNode) handleGetPendingPosts(w http.ResponseWriter, r *http.Re
 	json.NewEncoder(w).Encode(posts)
 }
 
-func (n *TruthChainNode) handleCreateTransfer(w http.ResponseWriter, r *http.Request) {
-	// Cap the request body — a transfer request is a few small fields.
+// handleSubmitTransfer accepts a CLIENT-SIGNED transfer. The node verifies and
+// relays it but never signs with its own key, so it cannot move the operator's
+// characters and is safe to expose.
+func (n *TruthChainNode) handleSubmitTransfer(w http.ResponseWriter, r *http.Request) {
+	// Cap the request body — a signed transfer is a few small fields.
+	r.Body = http.MaxBytesReader(w, r.Body, 8*1024)
+
+	var transfer chain.Transfer
+	if err := json.NewDecoder(r.Body).Decode(&transfer); err != nil {
+		http.Error(w, "Invalid request body: expected a signed transfer {from, to, amount, gas_fee, timestamp, nonce, signature}", http.StatusBadRequest)
+		return
+	}
+
+	// AddTransfer validates, verifies the signature against the sender, checks
+	// balance/nonce against state, and adds to the pool.
+	if err := n.blockchain.AddTransfer(transfer); err != nil {
+		http.Error(w, fmt.Sprintf("Rejected transfer: %v", err), http.StatusBadRequest)
+		return
+	}
+
+	if n.trustNetwork != nil {
+		_ = n.trustNetwork.BroadcastTransfer(&transfer)
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusCreated)
+	json.NewEncoder(w).Encode(transfer)
+}
+
+// handleLocalCreateTransfer is a loopback-only convenience endpoint that signs a
+// transfer with the NODE's own wallet. Refused for remote callers.
+func (n *TruthChainNode) handleLocalCreateTransfer(w http.ResponseWriter, r *http.Request) {
+	if !isLoopbackRequest(r) {
+		http.Error(w, "Forbidden: local signing is only available on loopback; sign client-side and use POST /transfers", http.StatusForbidden)
+		return
+	}
 	r.Body = http.MaxBytesReader(w, r.Body, 8*1024)
 
 	var req struct {
 		To     string `json:"to"`
 		Amount int    `json:"amount"`
 	}
-
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "Invalid request body", http.StatusBadRequest)
 		return
@@ -1220,8 +1305,16 @@ func (n *TruthChainNode) handleCreateTransfer(w http.ResponseWriter, r *http.Req
 		http.Error(w, fmt.Sprintf("Failed to create transfer: %v", err), http.StatusInternalServerError)
 		return
 	}
+	if err := n.blockchain.AddTransfer(*transfer); err != nil {
+		http.Error(w, fmt.Sprintf("Failed to enqueue transfer: %v", err), http.StatusInternalServerError)
+		return
+	}
+	if n.trustNetwork != nil {
+		_ = n.trustNetwork.BroadcastTransfer(transfer)
+	}
 
 	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusCreated)
 	json.NewEncoder(w).Encode(transfer)
 }
 

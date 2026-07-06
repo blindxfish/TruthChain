@@ -120,15 +120,20 @@ mainnet or exposed to the internet until the outstanding items below are closed.
   endpoint is loopback-guarded, the private key is no longer written into the
   config file, request bodies are size-limited, and the database open has a
   timeout.
+- **Consensus authentication & quorum** — block proposals and votes (including
+  the time-based path) are now signed and verified; vote quorum is measured
+  against the connected validator set instead of the votes received, so a single
+  node can no longer forge votes or unilaterally finalize a block.
+- **Non-custodial API** — `POST /posts` and `POST /transfers` now accept
+  client-signed transactions and the node no longer signs with its own key on a
+  caller's behalf; submitted posts are correctly enqueued and gossiped.
 
 ### ⚠️ Outstanding before mainnet (do not deploy yet)
-- **Consensus quorum & vote authentication** — approval is measured against
-  received votes rather than network size, and votes are not signed; a single
-  node can currently force block creation. Needs a real authenticated quorum.
-- **API transaction model** — state-mutating endpoints sign with the node's own
-  key for any local caller. This should move to **client-side signing** (the
-  browser/wallet signs; the node only validates and relays). Also, `POST /posts`
-  does not yet persist the created post.
+- **Validator-set agreement** — consensus messages are now authenticated and
+  quorum is measured against the validator set (see fixes above), but each node
+  computes that set from its own connected-peer view, so nodes with different
+  peer views can still disagree on finality. A canonical, agreed validator set
+  and a trust-bootstrapping model are still needed for BFT-grade safety.
 - **Chain reorganization** — the rollback path is currently a no-op; reorgs do
   not correctly revert state.
 - **Network robustness** — TCP message framing, per-connection read deadlines,
@@ -294,15 +299,29 @@ See the roadmap's **Phase 5** for how these map to production readiness.
 | `GET` | `/info` | Node information | ✅ Working |
 | `GET` | `/wallets/{address}` | Wallet information | ✅ Working |
 | `GET` | `/wallets/{address}/balance` | Wallet balance | ✅ Working |
-| `GET` | `/wallets/{address}/backup` | Download wallet backup | ✅ Working |
-| `POST` | `/posts` | Create a new post | ✅ Working |
+| `GET` | `/wallets/{address}/backup` | Download wallet backup (loopback only) | ✅ Working |
+| `POST` | `/posts` | Submit a **client-signed** post | ✅ Working |
+| `POST` | `/local/posts` | Post signed by the node's wallet (loopback only) | ✅ Working |
 | `GET` | `/posts/pending` | Get pending posts | ✅ Working |
-| `POST` | `/transfers` | Send characters | ✅ Working |
+| `POST` | `/transfers` | Submit a **client-signed** transfer | ✅ Working |
+| `POST` | `/local/transfers` | Transfer signed by the node's wallet (loopback only) | ✅ Working |
 | `GET` | `/transfers/pending` | Get pending transfers | ✅ Working |
 | `GET` | `/blockchain/latest` | Latest block | ✅ Working |
 | `GET` | `/blockchain/length` | Chain length | ✅ Working |
 | `GET` | `/network/stats` | Network statistics | ✅ Working |
 | `GET` | `/sync/status` | Sync status | ✅ Working |
+
+### Client-side signing (non-custodial)
+
+`POST /posts` and `POST /transfers` accept a **fully-signed** object — the caller
+(a browser wallet or other client) signs with its own private key and the node
+only verifies, enqueues, and gossips it. The node never signs on a caller's
+behalf, so these endpoints hold no key material and are safe to expose to a web
+frontend. The `/local/*` variants sign with the node operator's own wallet and
+are refused for any non-loopback caller (convenience for local CLI use).
+
+- **Post** signature: compact secp256k1 signature over `sha256(author + content + timestamp)`, hex-encoded; `hash = sha256(author + content + timestamp)`.
+- **Transfer** signature: over `from:to:amount:gas_fee:timestamp:nonce` (gas fee is always 1).
 
 ## 🔐 Security Features
 
