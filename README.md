@@ -81,7 +81,12 @@ go build -o truthchain_server cmd/main.go
 - **Block Proposal & Voting**: Consensus through proposal submission and voting
 - **Trust-based Proposer Selection**: Nodes with higher trust scores can propose blocks
 - **Dynamic Trust Score Management**: Trust scores based on node behavior
-- **Forkless Consensus**: No posts or burned characters are ever lost
+- **Forkless Consensus**: Single-proposer-per-height design (no forks by construction)
+
+> ⚠️ The consensus layer is **implemented but not yet hardened**. A security
+> audit found that vote quorum is not yet enforced against network size and
+> votes are not authenticated — see [Security Status & Known Limitations](#-security-status--known-limitations)
+> below. Do **not** rely on the consensus/mainnet guarantees yet.
 
 #### User Experience
 - **Interactive Setup Wizard**: Guided configuration for new users
@@ -90,7 +95,65 @@ go build -o truthchain_server cmd/main.go
 - **Wallet Management**: Create, import, backup, and restore wallets
 - **Bitcoin-style Restart**: No crashes, loads existing data automatically
 
+## 🔒 Security Status & Known Limitations
+
+TruthChain is a **working prototype under active hardening**. A full security &
+correctness audit (crypto, consensus, networking, storage/API) was performed and
+the highest-severity issues were fixed, but several architectural items remain
+open. **The network is not production-ready and must not be used on a public
+mainnet or exposed to the internet until the outstanding items below are closed.**
+
+### ✅ Recently fixed (audit pass)
+- **Build restored** — the repository previously did not compile (a required
+  source file had been deleted); it now builds, vets, and tests clean.
+- **Block hash verified on ingest** — the block hash is now recomputed and
+  checked on every sync/gossip path (previously it was attacker-controlled).
+- **Post & transfer signatures verified on ingest** — authorship is now checked
+  on the block-sync and gossip paths, not just at local creation.
+- **Transfer amount bounds** — an upper bound is enforced so `amount + gas`
+  cannot overflow and mint characters.
+- **Chain-continuity check** on the gossip block path (prevents chain-tip
+  poisoning by injecting a disconnected block).
+- **Concurrency crash fixed** — `NetworkTopology` maps are now mutex-protected
+  (they previously caused `concurrent map writes` panics under normal load).
+- **API hardening** — the HTTP API binds to `127.0.0.1` only, the wallet-backup
+  endpoint is loopback-guarded, the private key is no longer written into the
+  config file, request bodies are size-limited, and the database open has a
+  timeout.
+
+### ⚠️ Outstanding before mainnet (do not deploy yet)
+- **Consensus quorum & vote authentication** — approval is measured against
+  received votes rather than network size, and votes are not signed; a single
+  node can currently force block creation. Needs a real authenticated quorum.
+- **API transaction model** — state-mutating endpoints sign with the node's own
+  key for any local caller. This should move to **client-side signing** (the
+  browser/wallet signs; the node only validates and relays). Also, `POST /posts`
+  does not yet persist the created post.
+- **Chain reorganization** — the rollback path is currently a no-op; reorgs do
+  not correctly revert state.
+- **Network robustness** — TCP message framing, per-connection read deadlines,
+  connection limits, and receive-path rate limiting need work before public
+  exposure.
+- **Uptime mining** trusts unsigned local heartbeats; reward issuance is not yet
+  consensus-validated.
+- **Testing/process** — add a `-race` build and external security review to CI
+  before any launch.
+
+See the roadmap's **Phase 5** for how these map to production readiness.
+
 ## 🔧 Recent Fixes & Improvements
+
+### Security & Correctness Audit ✅ **FIXED**
+- **Issue**: `master` did not compile (deleted `chain/consensus_integration.go`),
+  and an audit found critical bugs: unverified block hashes, forgeable post
+  authorship, an integer-overflow minting path, a chain-tip poisoning vector, and
+  an unsynchronized topology map that crashed nodes.
+- **Fix**: Restored the build and closed the above issues; added block-hash and
+  signature verification on all ingest paths, transfer amount bounds, a
+  chain-continuity check, a topology mutex, and API/storage hardening.
+- **Result**: Builds green with new regression tests; see
+  [Security Status & Known Limitations](#-security-status--known-limitations)
+  for what is fixed vs. still open.
 
 ### Time-Based Block Generation ✅ **FIXED**
 - **Issue**: Time-based block generation was disabled, preventing proper block creation flow
@@ -251,11 +314,18 @@ go build -o truthchain_server cmd/main.go
 - **Nonce Protection**: Replay attack prevention
 - **Hash Verification**: Block and post integrity validation
 
+> ℹ️ These are the security mechanisms that exist today. For what is **not** yet
+> guaranteed (consensus quorum, API auth model, reorg handling, network
+> hardening), see [Security Status & Known Limitations](#-security-status--known-limitations).
+
 ### Security Best Practices
 - **Backup your wallet**: Save `YourWalletInfo.txt` in multiple secure locations
 - **Protect your private key**: Never share it with anyone
 - **Use secure environments**: Clean computers with updated software
-- **Firewall configuration**: Only open necessary ports (8080 for API, 9876 for mesh)
+- **Do not expose the API port**: The HTTP API (8080) binds to `127.0.0.1` and
+  has no authentication — keep it local. Only the mesh port (9876) is intended
+  to face the network. Put an authenticating reverse proxy in front if you need
+  remote API access.
 
 ## 🚀 Development Roadmap
 
@@ -321,6 +391,6 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 ---
 
-**⚠️ IMPORTANT**: TruthChain is currently in development. The blockchain is not live yet, and no mainnet exists. This is a working prototype with all core features implemented, but it's not ready for production use. Use testnet or local mode for testing and development.
+**⚠️ IMPORTANT**: TruthChain is currently in development. The blockchain is not live yet, and no mainnet exists. This is a working prototype with all core features implemented, but it is **not ready for production use** and has known open security items — see [Security Status & Known Limitations](#-security-status--known-limitations). Use **testnet or local mode** for testing and development, and do not expose a node to the public internet yet.
 
 **TruthChain**: Where truth is permanent, and history cannot be rewritten.
