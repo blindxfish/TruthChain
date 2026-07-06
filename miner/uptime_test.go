@@ -374,6 +374,10 @@ func TestDistributeRewards(t *testing.T) {
 		t.Fatalf("Failed to get initial balance: %v", err)
 	}
 
+	// Simulate that a full reward interval has elapsed since the last reward so
+	// the cadence guard allows a distribution.
+	ut.lastReward = now.Add(-ut.config.RewardInterval - time.Minute)
+
 	// Distribute rewards
 	if err := ut.distributeRewards(); err != nil {
 		t.Fatalf("Failed to distribute rewards: %v", err)

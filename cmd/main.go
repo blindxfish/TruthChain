@@ -829,11 +829,19 @@ func (n *TruthChainNode) initializeBeacon() error {
 // initializeMiner sets up the uptime miner
 func (n *TruthChainNode) initializeMiner() error {
 	beaconChecker := &beaconCheckerAdapter{beacon: n.beacon}
-	miner := miner.NewUptimeTracker(n.wallet, n.storage, beaconChecker)
-	n.miner = miner
+	m := miner.NewUptimeTracker(n.wallet, n.storage, beaconChecker)
+	n.miner = m
+	// Scale the mining reward by the observed network size (connected peers +
+	// self) rather than always assuming a single-node network.
+	if n.trustNetwork != nil {
+		tn := n.trustNetwork
+		m.SetNodeCountProvider(func() int {
+			return len(tn.PeerTable.GetConnectedPeers()) + 1
+		})
+	}
 	// Attach miner to trust network for uptime tracking
 	if n.trustNetwork != nil {
-		n.trustNetwork.UptimeTracker = miner
+		n.trustNetwork.UptimeTracker = m
 	}
 	return nil
 }

@@ -18,16 +18,25 @@ type BeaconChecker interface {
 	GetBeaconUptime() float64
 }
 
-// UptimeTracker manages node uptime tracking and character rewards
+// UptimeTracker manages node uptime tracking and character rewards.
+//
+// NOTE: reward minting here is a LOCAL balance credit, not yet validated by
+// network consensus — a node operator can always mint to themselves at the
+// capped rate using their own key. The hardening below prevents forged
+// heartbeats (from DB tampering without the key), double/rapid claims, and
+// always-max-reward, but consensus-validated issuance remains future work.
 type UptimeTracker struct {
-	wallet        *wallet.Wallet
-	storage       store.Storage
-	beaconChecker BeaconChecker // Beacon checker for incentive calculation
-	mu            sync.RWMutex
-	startTime     time.Time
-	lastReward    time.Time
-	heartbeats    []Heartbeat
-	config        UptimeConfig
+	wallet            *wallet.Wallet
+	storage           store.Storage
+	beaconChecker     BeaconChecker    // Beacon checker for incentive calculation
+	nodeCountProvider func() int       // Returns the observed network node count
+	mu                sync.RWMutex
+	startTime         time.Time
+	lastReward        time.Time
+	heartbeats        []Heartbeat
+	config            UptimeConfig
+	stopChan          chan struct{}
+	stopOnce          sync.Once
 }
 
 // UptimeConfig contains configuration for the uptime tracker
@@ -65,7 +74,17 @@ func NewUptimeTracker(w *wallet.Wallet, s store.Storage, beaconChecker BeaconChe
 		lastReward:    time.Now(),
 		heartbeats:    []Heartbeat{},
 		config:        DefaultUptimeConfig(),
+		stopChan:      make(chan struct{}),
 	}
+}
+
+// SetNodeCountProvider wires a function that reports the current observed
+// network size (e.g. connected peers + self). The reward-per-node decays with
+// this count; without it the node conservatively assumes it is alone.
+func (ut *UptimeTracker) SetNodeCountProvider(provider func() int) {
+	ut.mu.Lock()
+	defer ut.mu.Unlock()
+	ut.nodeCountProvider = provider
 }
 
 // Start begins the uptime tracking process
@@ -87,26 +106,36 @@ func (ut *UptimeTracker) Start() error {
 	return nil
 }
 
-// heartbeatLoop continuously logs heartbeats
+// heartbeatLoop continuously logs heartbeats until stopped.
 func (ut *UptimeTracker) heartbeatLoop() {
 	ticker := time.NewTicker(ut.config.HeartbeatInterval)
 	defer ticker.Stop()
 
-	for range ticker.C {
-		if err := ut.logHeartbeat(); err != nil {
-			fmt.Printf("Failed to log heartbeat: %v\n", err)
+	for {
+		select {
+		case <-ut.stopChan:
+			return
+		case <-ticker.C:
+			if err := ut.logHeartbeat(); err != nil {
+				fmt.Printf("Failed to log heartbeat: %v\n", err)
+			}
 		}
 	}
 }
 
-// rewardLoop handles daily reward distribution
+// rewardLoop handles reward distribution until stopped.
 func (ut *UptimeTracker) rewardLoop() {
 	ticker := time.NewTicker(ut.config.RewardInterval)
 	defer ticker.Stop()
 
-	for range ticker.C {
-		if err := ut.distributeRewards(); err != nil {
-			fmt.Printf("Failed to distribute rewards: %v\n", err)
+	for {
+		select {
+		case <-ut.stopChan:
+			return
+		case <-ticker.C:
+			if err := ut.distributeRewards(); err != nil {
+				fmt.Printf("Failed to distribute rewards: %v\n", err)
+			}
 		}
 	}
 }
@@ -133,8 +162,9 @@ func (ut *UptimeTracker) logHeartbeat() error {
 		Hash:      ut.calculateHeartbeatHash(heartbeatData),
 	}
 
-	// Add to heartbeats
+	// Add to heartbeats and bound in-memory growth
 	ut.heartbeats = append(ut.heartbeats, heartbeat)
+	ut.pruneHeartbeats()
 
 	// Save to storage
 	if err := ut.saveHeartbeat(heartbeat); err != nil {
@@ -167,7 +197,10 @@ func (ut *UptimeTracker) saveHeartbeat(heartbeat Heartbeat) error {
 	return nil
 }
 
-// LoadHeartbeats loads heartbeats from storage
+// LoadHeartbeats loads heartbeats from storage, discarding any whose signature
+// does not verify against this node's own wallet key. This prevents fabricated
+// heartbeats injected into the database (without the key) from inflating the
+// node's measured uptime and thus its reward.
 func (ut *UptimeTracker) LoadHeartbeats() error {
 	// Load from storage
 	heartbeatData, err := ut.storage.GetHeartbeats()
@@ -175,24 +208,82 @@ func (ut *UptimeTracker) LoadHeartbeats() error {
 		return fmt.Errorf("failed to load heartbeats from storage: %w", err)
 	}
 
-	// Parse heartbeats
+	// Parse and authenticate heartbeats
 	ut.heartbeats = []Heartbeat{}
+	skipped := 0
 	for _, data := range heartbeatData {
 		var heartbeat Heartbeat
 		if err := json.Unmarshal(data, &heartbeat); err != nil {
-			// Skip invalid heartbeats
+			skipped++
+			continue
+		}
+		if err := ut.verifyHeartbeat(heartbeat); err != nil {
+			skipped++
 			continue
 		}
 		ut.heartbeats = append(ut.heartbeats, heartbeat)
 	}
+	if skipped > 0 {
+		fmt.Printf("Discarded %d invalid/unauthenticated heartbeats on load\n", skipped)
+	}
 
+	ut.pruneHeartbeats()
 	return nil
+}
+
+// verifyHeartbeat checks that a heartbeat's hash and signature are consistent
+// with this node's wallet. Heartbeats are the node's own uptime proof, so a
+// valid one must be signed by this node's key.
+func (ut *UptimeTracker) verifyHeartbeat(hb Heartbeat) error {
+	if hb.Timestamp <= 0 {
+		return fmt.Errorf("invalid heartbeat timestamp")
+	}
+	data := fmt.Sprintf("%s%d", ut.wallet.GetAddress(), hb.Timestamp)
+
+	if hb.Hash != ut.calculateHeartbeatHash(data) {
+		return fmt.Errorf("heartbeat hash mismatch")
+	}
+
+	sigBytes, err := hex.DecodeString(hb.Signature)
+	if err != nil {
+		return fmt.Errorf("invalid heartbeat signature encoding: %w", err)
+	}
+	ok, err := ut.wallet.Verify([]byte(data), sigBytes)
+	if err != nil {
+		return fmt.Errorf("heartbeat signature verification failed: %w", err)
+	}
+	if !ok {
+		return fmt.Errorf("heartbeat signature does not match node wallet")
+	}
+	return nil
+}
+
+// pruneHeartbeats drops in-memory heartbeats older than the reward window (24h
+// plus a small margin) so the slice cannot grow without bound over long uptime.
+// Caller must hold ut.mu (or be in a single-threaded load path).
+func (ut *UptimeTracker) pruneHeartbeats() {
+	cutoff := time.Now().Add(-25 * time.Hour).Unix()
+	kept := ut.heartbeats[:0]
+	for _, hb := range ut.heartbeats {
+		if hb.Timestamp >= cutoff {
+			kept = append(kept, hb)
+		}
+	}
+	ut.heartbeats = kept
 }
 
 // distributeRewards calculates and distributes character rewards every 10 minutes
 func (ut *UptimeTracker) distributeRewards() error {
 	ut.mu.Lock()
 	defer ut.mu.Unlock()
+
+	// Enforce the reward cadence by wall-clock, not just ticker frequency: this
+	// prevents rapid/duplicate claims if distributeRewards is invoked more often
+	// than RewardInterval (e.g. restart loops or extra calls). A small slack
+	// absorbs ticker jitter.
+	if elapsed := time.Since(ut.lastReward); elapsed < ut.config.RewardInterval-time.Second {
+		return nil
+	}
 
 	// Calculate uptime percentage for the last 24 hours
 	uptimePercent := ut.calculateUptimePercent()
@@ -202,8 +293,14 @@ func (ut *UptimeTracker) distributeRewards() error {
 		return nil
 	}
 
-	// Calculate daily reward based on node count
-	nodeCount := 1 // For now, assume we're the only node
+	// Reward per node decays with the observed network size. Fall back to a
+	// single-node assumption only when no provider is wired.
+	nodeCount := 1
+	if ut.nodeCountProvider != nil {
+		if n := ut.nodeCountProvider(); n > 0 {
+			nodeCount = n
+		}
+	}
 	dailyReward := ut.calculateReward(nodeCount)
 
 	// Distribute daily reward across 144 batches (every 10 minutes)
@@ -387,9 +484,11 @@ func (ut *UptimeTracker) GetUptimeInfo() map[string]interface{} {
 	}
 }
 
-// Stop stops the uptime tracker
+// Stop stops the uptime tracker's background goroutines. Safe to call more than
+// once.
 func (ut *UptimeTracker) Stop() {
-	// Signal goroutines to stop
-	// For now, we'll rely on the main process to stop
+	ut.stopOnce.Do(func() {
+		close(ut.stopChan)
+	})
 	fmt.Println("Uptime tracker stopped")
 }
