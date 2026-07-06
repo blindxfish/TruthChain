@@ -240,11 +240,11 @@ See the roadmap's **Phase 5** for how these map to production readiness.
 - **Production Consensus**: Consensus rules need finalization and testing
 
 #### Advanced Features
-- **Frontend Applications**: No web or mobile interfaces yet
+- **Frontend Applications**: A dependency-free browser wallet SDK and a working demo page exist ([`web/`](web/)); a polished web/mobile app is not built yet
 - **Block Explorer**: No public block explorer for viewing the blockchain
-- **Advanced API Features**: Some API endpoints are placeholder implementations
+- **Advanced API Features**: Non-custodial submit, faucet, and headless gateway mode are implemented; some endpoints remain basic
 - **Performance Optimization**: System needs optimization for high transaction volumes
-- **Security Audits**: No formal security audits have been conducted
+- **Security Audits**: An internal audit + fixes were done; no external/formal audit yet
 
 #### Economic Model
 - **Uptime Mining**: Character reward system is implemented but not active on mainnet
@@ -374,9 +374,11 @@ by a cross-language test (`chain/wallet_interop_test.go`).
 - **Nonce Protection**: Replay attack prevention
 - **Hash Verification**: Block and post integrity validation
 
-> ℹ️ These are the security mechanisms that exist today. For what is **not** yet
-> guaranteed (consensus quorum, API auth model, reorg handling, network
-> hardening), see [Security Status & Known Limitations](#-security-status--known-limitations).
+> ℹ️ These are the baseline mechanisms. Consensus authentication/quorum, the
+> non-custodial API, reorg handling, and network hardening have since been added
+> (see the Phase 5 list above). For what is **still** not guaranteed (canonical
+> validator-set agreement, consensus-validated issuance, external audit), see
+> [Security Status & Known Limitations](#-security-status--known-limitations).
 
 ### Security Best Practices
 - **Backup your wallet**: Save `YourWalletInfo.txt` in multiple secure locations
@@ -415,19 +417,28 @@ by a cross-language test (`chain/wallet_interop_test.go`).
 - ✅ Wallet management
 - ✅ Bitcoin-style restart system
 
-### Phase 5: Production Readiness 🔄 **IN PROGRESS**
-- 🔄 Finalize consensus rules
-- 🔄 Create genesis block for mainnet
-- 🔄 Launch public mainnet nodes
-- 🔄 Activate uptime mining and rewards
-- 🔄 Complete security audits
+### Phase 5: Production Readiness 🔄 **IN PROGRESS** (core hardening done)
 
-### Phase 6: Ecosystem Development ❌ **NOT STARTED**
-- ❌ Frontend applications (web/mobile)
+Completed (with regression tests — see [Security Status](#-security-status--known-limitations)):
+- ✅ Consensus hardening: authenticated block proposals & votes, quorum measured against the validator set, node-local trust gating
+- ✅ Non-custodial API: client-signed posts/transfers (node never signs on a caller's behalf)
+- ✅ Network transport hardening: cross-read message reassembly, read/write deadlines, connection caps, per-peer rate limiting
+- ✅ Chain reorg/rollback with correct state restoration
+- ✅ Uptime-mining hardening: signed heartbeats, wall-clock reward cadence, node-count–scaled rewards
+- ✅ Internal security & correctness audit + fixes
+
+Remaining before a mainnet launch:
+- 🔄 Canonical, agreed validator set + trust bootstrapping (BFT-grade finality)
+- 🔄 Consensus-validated reward issuance; unify the in-memory state and storage balance ledgers
+- ❌ Create the mainnet genesis block and launch public mainnet nodes
+- ❌ External security audit and a `-race` build in CI
+
+### Phase 6: Ecosystem Development 🔄 **IN PROGRESS**
+- ✅ Developer SDK: dependency-free browser wallet + JS client, proven interoperable with the node ([`web/`](web/))
+- 🔄 Frontend applications (web/mobile): a working demo wallet exists ([`web/demo.html`](web/demo.html)); a polished app is pending
+- ✅ Advanced API features: non-custodial submit, faucet distribution, headless/gateway mode
 - ❌ Block explorer
-- ❌ Advanced API features
 - ❌ Performance optimization
-- ❌ Developer tools and SDKs
 
 ## 🤝 Contributing
 
