@@ -132,6 +132,16 @@ mainnet or exposed to the internet until the outstanding items below are closed.
   per-connection buffer; mesh and sync connections have read/write deadlines,
   the handshake is size-capped and deadlined (anti-slowloris), inbound
   connections are capped, and the receive path is rate-limited per peer.
+- **Uptime-mining hardening** — heartbeats are signature-verified on load
+  (fabricated ones are discarded), the reward cadence is wall-clock enforced (no
+  rapid/duplicate claims), reward-per-node scales with the observed network size
+  instead of always paying the single-node maximum, and the mining goroutines
+  now stop cleanly. (Reward issuance is still a local self-mint — consensus
+  validation remains future work.)
+- **Chain reorg / rollback** — the rollback path now actually restores wallet
+  state from the target block's StateRoot snapshot and truncates the abandoned
+  blocks (it was previously a no-op that left state and orphan blocks behind);
+  block sync/reorg now also refreshes in-memory state from the new tip.
 
 ### ⚠️ Outstanding before mainnet (do not deploy yet)
 - **Validator-set agreement** — consensus messages are now authenticated and
@@ -139,10 +149,10 @@ mainnet or exposed to the internet until the outstanding items below are closed.
   computes that set from its own connected-peer view, so nodes with different
   peer views can still disagree on finality. A canonical, agreed validator set
   and a trust-bootstrapping model are still needed for BFT-grade safety.
-- **Chain reorganization** — the rollback path is currently a no-op; reorgs do
-  not correctly revert state.
-- **Uptime mining** trusts unsigned local heartbeats; reward issuance is not yet
-  consensus-validated.
+- **Consensus-validated issuance** — mining rewards are still credited locally
+  by each node rather than being agreed and validated through consensus, and the
+  in-memory state manager and the storage balances bucket are separate ledgers
+  that should be unified.
 - **Testing/process** — add a `-race` build and external security review to CI
   before any launch.
 

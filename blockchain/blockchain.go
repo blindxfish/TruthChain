@@ -886,6 +886,19 @@ func (bc *Blockchain) IntegrateBlocksFromSync(blocks []*chain.Block) (int, int, 
 		blocksAdded++
 	}
 
+	// Integrated blocks carry the authoritative wallet state in their StateRoot,
+	// but saving them does not by itself update the in-memory state. Restore the
+	// state from the highest integrated block's snapshot so balances/nonces stay
+	// consistent with the chain after a sync or reorg.
+	if blocksAdded > 0 {
+		tip := blocks[len(blocks)-1]
+		if tip.StateRoot != nil {
+			if err := bc.stateManager.LoadStateFromStateRoot(tip.StateRoot); err != nil {
+				return blocksAdded, blocksSkipped, fmt.Errorf("failed to load state from block %d: %w", tip.Index, err)
+			}
+		}
+	}
+
 	return blocksAdded, blocksSkipped, nil
 }
 
@@ -969,17 +982,57 @@ func (bc *Blockchain) findCommonAncestor(newBlocks, currentBlocks []*chain.Block
 	return -1 // No common ancestor found
 }
 
-// rollbackToBlock rolls back the chain to the specified block
+// rollbackToBlock rolls the chain back to blockIndex: it restores wallet state
+// to the snapshot committed by that block, removes every block above it, and
+// clears pending pools whose validity depends on the abandoned state. Each block
+// carries a full StateRoot snapshot, so the target block's StateRoot is the
+// authoritative post-block state.
 func (bc *Blockchain) rollbackToBlock(blockIndex int) error {
-	// This is a simplified rollback - in production you'd need to handle state rollback
-	log.Printf("Rolling back chain to block %d", blockIndex)
+	if blockIndex < 0 {
+		return fmt.Errorf("invalid rollback target: %d", blockIndex)
+	}
 
-	// For now, we'll just truncate the database
-	// In a full implementation, you'd need to:
-	// 1. Rollback state changes
-	// 2. Rollback pending transactions
-	// 3. Handle orphaned blocks
+	chainLength, err := bc.storage.GetBlockCount()
+	if err != nil {
+		return fmt.Errorf("failed to get chain length: %w", err)
+	}
+	tip := chainLength - 1
+	if blockIndex >= tip {
+		// Nothing above the target to remove.
+		return nil
+	}
 
+	log.Printf("Rolling back chain from block %d to block %d", tip, blockIndex)
+
+	// Restore wallet state (balances/nonces) to the target block's snapshot.
+	target, err := bc.storage.GetBlock(blockIndex)
+	if err != nil {
+		return fmt.Errorf("failed to load rollback target block %d: %w", blockIndex, err)
+	}
+	if target.StateRoot == nil {
+		return fmt.Errorf("rollback target block %d has no state root", blockIndex)
+	}
+	if err := bc.stateManager.LoadStateFromStateRoot(target.StateRoot); err != nil {
+		return fmt.Errorf("failed to restore state at block %d: %w", blockIndex, err)
+	}
+
+	// Remove blocks above the target, highest first so the stored latest index
+	// walks back down to the target.
+	for i := tip; i > blockIndex; i-- {
+		if err := bc.storage.DeleteBlock(i); err != nil {
+			return fmt.Errorf("failed to delete block %d during rollback: %w", i, err)
+		}
+	}
+
+	// Pending posts/transfers were validated against the now-abandoned state and
+	// may no longer be valid; clear them so they are re-validated when
+	// re-gossiped against the restored state.
+	bc.mu.Lock()
+	bc.PendingPosts = nil
+	bc.TransferPool = chain.NewTransferPool()
+	bc.mu.Unlock()
+
+	log.Printf("Rollback complete: removed %d block(s), restored state to block %d", tip-blockIndex, blockIndex)
 	return nil
 }
 
