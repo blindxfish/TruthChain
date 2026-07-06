@@ -45,6 +45,9 @@ type TruthChainNode struct {
 	// Consensus system
 	consensusIntegration *chain.ConsensusIntegration
 	consensusNetwork     *network.ConsensusNetwork
+
+	// Public gateway
+	faucet *faucetState
 }
 
 // NodeConfig holds the node configuration
@@ -67,6 +70,15 @@ type NodeConfig struct {
 	// the 0600 wallet file, not in the config.
 	PrivateKey        string `json:"-"`
 	ConfigureFirewall bool
+
+	// Public-gateway options: let a website expose this node's read+submit API to
+	// its users' browsers and hand out characters. All default off / conservative.
+	PublicAPI         bool `json:"public_api"`          // bind API to 0.0.0.0 (else loopback)
+	APIRateLimit      int  `json:"api_rate_limit"`      // max requests/min per IP (0 => 120)
+	FaucetEnabled     bool `json:"faucet_enabled"`      // enable POST /faucet
+	FaucetAmount      int  `json:"faucet_amount"`       // characters per claim (0 => 100)
+	FaucetCooldownSec int  `json:"faucet_cooldown_sec"` // per-address cooldown (0 => 3600)
+	FaucetDailyCap    int  `json:"faucet_daily_cap"`    // max characters/day (0 => 10000)
 }
 
 func clearScreen() {
@@ -718,12 +730,18 @@ func NewTruthChainNode(config *NodeConfig) (*TruthChainNode, error) {
 	// Create router for API
 	router := mux.NewRouter()
 
-	// Create API server. Bind to loopback only: the API exposes wallet
-	// operations (post/transfer signing with the node's own key, wallet backup)
-	// and has no authentication, so it must never be reachable off-host. Front
-	// it with an authenticating reverse proxy if remote access is required.
+	// Bind address: loopback by default. Only bind all interfaces when the
+	// operator explicitly enables public-gateway mode. The API is non-custodial
+	// (posts/transfers must be client-signed; the node never signs on a caller's
+	// behalf) and rate-limited, so it is safe to expose; the key-bearing
+	// endpoints (/local/*, wallet backup) remain loopback-guarded regardless.
+	bindHost := "127.0.0.1"
+	if config.PublicAPI {
+		bindHost = "0.0.0.0"
+		log.Printf("⚠️  Public API mode: binding API to %s:%d (reachable off-host)", bindHost, config.APIPort)
+	}
 	apiServer := &http.Server{
-		Addr:         fmt.Sprintf("127.0.0.1:%d", config.APIPort),
+		Addr:         fmt.Sprintf("%s:%d", bindHost, config.APIPort),
 		Handler:      router,
 		ReadTimeout:  30 * time.Second,
 		WriteTimeout: 30 * time.Second,
@@ -740,6 +758,7 @@ func NewTruthChainNode(config *NodeConfig) (*TruthChainNode, error) {
 		config:       config,
 		isRunning:    false,
 		stopChan:     make(chan struct{}),
+		faucet:       newFaucetState(),
 	}
 
 	// --- CONSENSUS INTEGRATION ---
@@ -901,7 +920,11 @@ func (n *TruthChainNode) setupAPIRoutes() {
 	// Sync endpoints
 	n.router.HandleFunc("/sync/status", n.handleSyncStatus).Methods("GET")
 
-	// Add CORS headers
+	// Gateway: character distribution for websites funding their users.
+	n.router.HandleFunc("/faucet", n.handleFaucet).Methods("POST")
+
+	// Middleware: rate limit first (cheapest rejection), then CORS.
+	n.router.Use(n.rateLimitMiddleware)
 	n.router.Use(n.corsMiddleware)
 }
 
