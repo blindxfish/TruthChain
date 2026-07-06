@@ -1,0 +1,109 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>TruthChain Wallet Demo</title>
+  <style>
+    :root { color-scheme: light dark; }
+    body { font-family: system-ui, sans-serif; max-width: 720px; margin: 2rem auto; padding: 0 1rem; line-height: 1.5; }
+    h1 { font-size: 1.4rem; }
+    fieldset { border: 1px solid #8884; border-radius: 8px; margin: 1rem 0; padding: 1rem; }
+    legend { font-weight: 600; padding: 0 .4rem; }
+    label { display: block; font-size: .85rem; opacity: .8; margin-top: .5rem; }
+    input, textarea, button { font: inherit; padding: .5rem; border-radius: 6px; border: 1px solid #8886; width: 100%; box-sizing: border-box; background: transparent; color: inherit; }
+    button { cursor: pointer; background: #2563eb; color: #fff; border: none; margin-top: .6rem; width: auto; padding: .5rem 1rem; }
+    button.secondary { background: #6b7280; }
+    code, .mono { font-family: ui-monospace, monospace; word-break: break-all; }
+    .out { background: #8881; border-radius: 6px; padding: .6rem; margin-top: .6rem; font-family: ui-monospace, monospace; font-size: .8rem; white-space: pre-wrap; }
+    .warn { color: #b45309; font-size: .8rem; }
+  </style>
+</head>
+<body>
+  <h1>🌐 TruthChain Wallet Demo</h1>
+  <p>A minimal, non-custodial wallet built entirely on the TruthChain SDK. Your
+  private key is generated <strong>in this browser</strong> and never sent to the node.</p>
+
+  <fieldset>
+    <legend>Node</legend>
+    <label>Node API URL (must have <code>public_api</code> + CORS enabled)</label>
+    <input id="nodeUrl" value="http://localhost:8080" />
+    <button onclick="checkNode()">Check connection</button>
+    <div class="out" id="nodeOut">not connected</div>
+  </fieldset>
+
+  <fieldset>
+    <legend>1. Your wallet</legend>
+    <button onclick="makeWallet()">Create wallet (in browser)</button>
+    <button class="secondary" onclick="refreshBalance()">Refresh balance</button>
+    <label>Address</label><div class="mono" id="addr">—</div>
+    <label>Balance</label><div class="mono" id="bal">—</div>
+    <label>Private key <span class="warn">(save this — it is never stored on the node)</span></label>
+    <div class="mono" id="priv">—</div>
+  </fieldset>
+
+  <fieldset>
+    <legend>2. Get characters (faucet)</legend>
+    <p style="font-size:.85rem;opacity:.8">Asks the node operator to send you characters so you can post.</p>
+    <button onclick="faucet()">Request characters</button>
+    <div class="out" id="faucetOut"></div>
+  </fieldset>
+
+  <fieldset>
+    <legend>3. Post to the chain</legend>
+    <label>Content</label>
+    <textarea id="content" rows="3">Hello, permanent world.</textarea>
+    <button onclick="post()">Sign &amp; post</button>
+    <div class="out" id="postOut"></div>
+  </fieldset>
+
+  <fieldset>
+    <legend>4. Send characters</legend>
+    <label>To address</label><input id="to" placeholder="1..." />
+    <label>Amount</label><input id="amount" type="number" value="10" />
+    <button onclick="transfer()">Sign &amp; send</button>
+    <div class="out" id="transferOut"></div>
+  </fieldset>
+
+  <script src="truthchain-wallet.js"></script>
+  <script src="truthchain-sdk.js"></script>
+  <script>
+    let tc = null, wallet = null;
+    const $ = (id) => document.getElementById(id);
+    const client = () => TruthChain.connect($('nodeUrl').value);
+
+    async function checkNode() {
+      try {
+        const s = await client().getStatus();
+        $('nodeOut').textContent = 'connected: ' + JSON.stringify(s);
+      } catch (e) { $('nodeOut').textContent = 'error: ' + e.message; }
+    }
+    function makeWallet() {
+      wallet = TruthChain.connect('http://x').createWallet();
+      $('addr').textContent = wallet.address;
+      $('priv').textContent = wallet.privateKeyHex;
+      $('bal').textContent = '0 (new)';
+    }
+    async function refreshBalance() {
+      if (!wallet) return alert('create a wallet first');
+      try { $('bal').textContent = await client().getBalance(wallet.address); }
+      catch (e) { $('bal').textContent = 'error: ' + e.message; }
+    }
+    async function faucet() {
+      if (!wallet) return alert('create a wallet first');
+      try { $('faucetOut').textContent = JSON.stringify(await client().requestFaucet(wallet.address)); }
+      catch (e) { $('faucetOut').textContent = 'error: ' + e.message; }
+    }
+    async function post() {
+      if (!wallet) return alert('create a wallet first');
+      try { $('postOut').textContent = 'posted: ' + JSON.stringify(await client().post(wallet.privateKeyHex, $('content').value)); }
+      catch (e) { $('postOut').textContent = 'error: ' + e.message; }
+    }
+    async function transfer() {
+      if (!wallet) return alert('create a wallet first');
+      try { $('transferOut').textContent = 'sent: ' + JSON.stringify(await client().transfer(wallet.privateKeyHex, $('to').value, parseInt($('amount').value, 10))); }
+      catch (e) { $('transferOut').textContent = 'error: ' + e.message; }
+    }
+  </script>
+</body>
+</html>

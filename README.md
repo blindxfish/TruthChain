@@ -335,6 +335,35 @@ are refused for any non-loopback caller (convenience for local CLI use).
 - **Post** signature: compact secp256k1 signature over `sha256(author + content + timestamp)`, hex-encoded; `hash = sha256(author + content + timestamp)`.
 - **Transfer** signature: over `from:to:amount:gas_fee:timestamp:nonce` (gas fee is always 1).
 
+## 🧩 Embed in a website (non-custodial wallets)
+
+TruthChain ships a drop-in JS SDK so any website can let its users create
+wallets, post, and receive/spend characters — **without the user running a node
+and without the site ever holding their private keys**. Keys are generated in the
+user's browser and all posts/transfers are signed client-side; the node only
+relays already-signed objects.
+
+```html
+<script src="web/truthchain-wallet.js"></script>
+<script src="web/truthchain-sdk.js"></script>
+<script>
+  const tc = TruthChain.connect('https://your-node:8080');
+  const wallet = tc.createWallet();        // key made in the browser
+  await tc.requestFaucet(wallet.address);   // your node funds the user
+  await tc.post(wallet.privateKeyHex, 'hello, permanent world');
+</script>
+```
+
+Run a public gateway node for your users (headless, e.g. in Docker):
+
+```bash
+TRUTHCHAIN_PUBLIC_API=true TRUTHCHAIN_FAUCET=true ./truthchain_server --headless
+```
+
+Full guide and a working page: [`web/INTEGRATION.md`](web/INTEGRATION.md) and
+[`web/demo.html`](web/demo.html). Browser↔node crypto compatibility is enforced
+by a cross-language test (`chain/wallet_interop_test.go`).
+
 ## 🔐 Security Features
 
 ### Implemented Security

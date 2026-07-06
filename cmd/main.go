@@ -200,14 +200,24 @@ func main() {
 		return
 	}
 
+	headless := len(os.Args) > 1 && os.Args[1] == "--headless"
+
 	// Bitcoin-style approach: Check for existing data
 	config := checkForExistingData()
 	if config == nil {
-		// No existing data found, run interactive setup
-		config = runInteractiveSetup()
-		if config == nil {
-			log.Println("Setup cancelled by user")
-			return
+		if headless {
+			// Non-interactive first run: build config from environment.
+			config = buildHeadlessConfig()
+			if err := saveConfig(config); err != nil {
+				log.Printf("Warning: failed to save headless config: %v", err)
+			}
+		} else {
+			// No existing data found, run interactive setup
+			config = runInteractiveSetup()
+			if config == nil {
+				log.Println("Setup cancelled by user")
+				return
+			}
 		}
 	} else {
 		log.Printf("Found existing TruthChain data, starting with saved configuration")
