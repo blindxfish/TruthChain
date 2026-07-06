@@ -12,6 +12,15 @@ import (
 	"github.com/blindxfish/truthchain/chain"
 )
 
+// Sync transport bounds so a peer cannot hang a sync goroutine or force
+// unbounded buffering with a request/response that never sends a newline.
+const (
+	syncRequestMaxBytes  = 64 * 1024        // a ChainSyncRequest is small
+	syncResponseMaxBytes = 32 * 1024 * 1024 // a block batch can be large
+	syncReadDeadline     = 60 * time.Second
+	syncWriteDeadline    = 60 * time.Second
+)
+
 // StartSyncServer starts a TCP server to handle chain sync requests
 func StartSyncServer(bindAddr string, bc *blockchain.Blockchain, nodeID string) error {
 	fmt.Printf("[SyncServer] Attempting to bind to %s...\n", bindAddr)
@@ -39,7 +48,11 @@ func StartSyncServer(bindAddr string, bc *blockchain.Blockchain, nodeID string) 
 
 func handleSyncConnection(conn net.Conn, bc *blockchain.Blockchain, nodeID string) {
 	defer conn.Close()
-	reader := bufio.NewReader(conn)
+
+	// Bound the request read: deadline + size cap against slowloris / unbounded
+	// buffering from a peer that never terminates its request line.
+	_ = conn.SetReadDeadline(time.Now().Add(syncReadDeadline))
+	reader := bufio.NewReader(io.LimitReader(conn, syncRequestMaxBytes))
 	writer := bufio.NewWriter(conn)
 
 	// Read request
@@ -101,6 +114,7 @@ func handleSyncConnection(conn net.Conn, bc *blockchain.Blockchain, nodeID strin
 		resp.Blocks = blocks
 	}
 	respBytes, _ := json.Marshal(resp)
+	_ = conn.SetWriteDeadline(time.Now().Add(syncWriteDeadline))
 	writer.Write(respBytes)
 	writer.WriteByte('\n')
 	writer.Flush()
@@ -120,7 +134,10 @@ func SyncFromPeerTCPWithHeaders(peerAddr string, fromIndex int, toIndex int, nod
 	}
 	defer conn.Close()
 	writer := bufio.NewWriter(conn)
-	reader := bufio.NewReader(conn)
+	// Bound the response read: deadline + size cap so a malicious peer cannot
+	// stream unbounded data or stall this sync forever.
+	_ = conn.SetReadDeadline(time.Now().Add(syncReadDeadline))
+	reader := bufio.NewReader(io.LimitReader(conn, syncResponseMaxBytes))
 
 	// Send request
 	req := chain.ChainSyncRequest{
@@ -131,6 +148,7 @@ func SyncFromPeerTCPWithHeaders(peerAddr string, fromIndex int, toIndex int, nod
 		HeadersOnly: headersOnly,
 	}
 	reqBytes, _ := json.Marshal(req)
+	_ = conn.SetWriteDeadline(time.Now().Add(syncWriteDeadline))
 	writer.Write(reqBytes)
 	writer.WriteByte('\n')
 	writer.Flush()

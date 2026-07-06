@@ -1,7 +1,6 @@
 package network
 
 import (
-	"bufio"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -10,6 +9,104 @@ import (
 	"sync"
 	"time"
 )
+
+// Mesh transport robustness limits (Track C hardening). These bound blocking
+// I/O, per-peer buffering, connection count, and message rate so a hostile or
+// broken peer cannot crash, hang, or exhaust the node.
+const (
+	// maxMeshFrameBytes caps how much unparsed data is buffered per connection.
+	// A single message larger than this (or a peer that never completes one)
+	// drops the connection instead of consuming unbounded memory.
+	maxMeshFrameBytes = 2 * 1024 * 1024 // 2 MB (> MaxBlockSize 1 MB)
+	// maxMeshConnections caps concurrent mesh connections.
+	maxMeshConnections = 64
+	// handshakeMaxBytes bounds the wallet-address handshake line.
+	handshakeMaxBytes = 256
+	// meshReadDeadline / meshWriteDeadline bound blocking reads/writes so a
+	// stalled or slowloris peer cannot pin a goroutine or a broadcast forever.
+	meshReadDeadline  = 120 * time.Second
+	meshWriteDeadline = 15 * time.Second
+	handshakeDeadline = 15 * time.Second
+	// Receive-path rate limit: max messages processed per window per peer.
+	meshRateWindow  = 10 * time.Second
+	meshRateMaxMsgs = 500
+)
+
+// writeToConn writes data with a bounded write deadline so a stalled peer cannot
+// block the caller indefinitely.
+func writeToConn(conn net.Conn, data []byte) error {
+	_ = conn.SetWriteDeadline(time.Now().Add(meshWriteDeadline))
+	_, err := conn.Write(data)
+	return err
+}
+
+// readHandshakeLine reads a single newline-terminated line (the peer's wallet
+// address) with a deadline and a hard size cap. It reads one byte at a time so
+// it does not over-read and silently discard pipelined post-handshake bytes.
+func readHandshakeLine(conn net.Conn) (string, error) {
+	_ = conn.SetReadDeadline(time.Now().Add(handshakeDeadline))
+	defer conn.SetReadDeadline(time.Time{})
+
+	buf := make([]byte, 0, 64)
+	one := make([]byte, 1)
+	for len(buf) < handshakeMaxBytes {
+		n, err := conn.Read(one)
+		if err != nil {
+			return "", err
+		}
+		if n == 0 {
+			continue
+		}
+		if one[0] == '\n' {
+			return strings.TrimSpace(string(buf)), nil
+		}
+		buf = append(buf, one[0])
+	}
+	return "", fmt.Errorf("handshake line exceeded %d bytes", handshakeMaxBytes)
+}
+
+// jsonObjectEnd returns the index just past the end of the JSON object/array
+// that begins at start, or -1 if the buffer does not yet contain the complete
+// object (so the caller should retain the tail and wait for more data).
+func jsonObjectEnd(data []byte, start int) int {
+	braceCount, bracketCount := 0, 0
+	inString, escapeNext := false, false
+	for i := start; i < len(data); i++ {
+		c := data[i]
+		if escapeNext {
+			escapeNext = false
+			continue
+		}
+		if c == '\\' {
+			escapeNext = true
+			continue
+		}
+		if c == '"' {
+			inString = !inString
+			continue
+		}
+		if inString {
+			continue
+		}
+		switch c {
+		case '{':
+			braceCount++
+		case '}':
+			braceCount--
+			if braceCount == 0 && bracketCount == 0 {
+				return i + 1
+			}
+		case '[':
+			bracketCount++
+		case ']':
+			bracketCount--
+			if braceCount == 0 && bracketCount == 0 {
+				return i + 1
+			}
+		}
+	}
+	return -1
+}
 
 // ConnectionHistory tracks connection history for an IP address
 type ConnectionHistory struct {
@@ -368,21 +465,18 @@ func (mm *MeshManager) establishConnection(address string) {
 	// --- Wallet handshake ---
 	// Send our wallet address
 	ourWallet := mm.network.Wallet.GetAddress()
-	_, err = conn.Write([]byte(ourWallet + "\n"))
-	if err != nil {
+	if err = writeToConn(conn, []byte(ourWallet+"\n")); err != nil {
 		log.Printf("Failed to send handshake to %s: %v", address, err)
 		conn.Close()
 		return
 	}
-	// Read remote wallet address
-	remoteReader := bufio.NewReader(conn)
-	remoteWallet, err := remoteReader.ReadString('\n')
+	// Read remote wallet address (bounded + deadlined against slowloris)
+	remoteWallet, err := readHandshakeLine(conn)
 	if err != nil {
 		log.Printf("Failed to read handshake from %s: %v", address, err)
 		conn.Close()
 		return
 	}
-	remoteWallet = strings.TrimSpace(remoteWallet)
 	if remoteWallet == ourWallet {
 		// Self-connection, close quietly
 		conn.Close()
@@ -466,167 +560,117 @@ func (mm *MeshManager) dropConnection(address string) {
 	}
 }
 
-// handleConnection handles an active connection
+// handleConnection handles an active connection. It reassembles the byte stream
+// across reads (messages may span multiple TCP segments or exceed one read),
+// bounds the per-connection buffer, and rate-limits the receive path.
 func (mm *MeshManager) handleConnection(meshConn *MeshConnection) {
 	defer func() {
 		mm.dropConnection(meshConn.Address)
 	}()
 
-	// Set up connection for reading
-	buffer := make([]byte, 4096)
+	readBuf := make([]byte, 32*1024)
+	var acc []byte
+
+	windowStart := time.Now()
+	msgCount := 0
 
 	for {
-		// Set read deadline
-		meshConn.Conn.SetReadDeadline(time.Now().Add(30 * time.Second))
+		_ = meshConn.Conn.SetReadDeadline(time.Now().Add(meshReadDeadline))
 
-		// Read data
-		n, err := meshConn.Conn.Read(buffer)
+		n, err := meshConn.Conn.Read(readBuf)
 		if err != nil {
 			log.Printf("Connection read error from %s: %v", meshConn.Address, err)
 			return
 		}
-
-		if n > 0 {
-			// Process received data
-			data := buffer[:n]
-			mm.processReceivedData(meshConn.Address, data)
+		if n == 0 {
+			continue
 		}
+
+		acc = append(acc, readBuf[:n]...)
+		if len(acc) > maxMeshFrameBytes {
+			log.Printf("Peer %s exceeded max buffered frame (%d bytes) - dropping", meshConn.Address, len(acc))
+			return
+		}
+
+		consumed, processed := mm.processStream(meshConn.Address, acc)
+		if consumed > 0 {
+			// Retain any trailing incomplete message for the next read.
+			acc = append(acc[:0], acc[consumed:]...)
+		}
+
+		// Receive-path rate limit: drop peers that flood us with messages.
+		if time.Since(windowStart) >= meshRateWindow {
+			windowStart = time.Now()
+			msgCount = 0
+		}
+		msgCount += processed
+		if msgCount > meshRateMaxMsgs {
+			log.Printf("Peer %s exceeded receive rate limit (%d msgs / %s) - dropping", meshConn.Address, msgCount, meshRateWindow)
+			return
+		}
+
+		// Update last activity time.
+		mm.mu.Lock()
+		if conn, exists := mm.connections[meshConn.Address]; exists {
+			conn.LastPing = time.Now()
+		}
+		mm.mu.Unlock()
 	}
 }
 
-// processReceivedData processes data received from a mesh peer
-func (mm *MeshManager) processReceivedData(address string, data []byte) {
-	// Convert to string for easier processing
-	dataStr := string(data)
+// processStream extracts and processes every complete JSON message in data,
+// treating non-JSON bytes (PING tokens, stray protocol text) as ignorable. It
+// returns the number of bytes consumed (the caller retains the rest for the next
+// read) and the number of messages processed (for rate limiting).
+func (mm *MeshManager) processStream(address string, data []byte) (int, int) {
+	consumed, processed := 0, 0
 
-	// Check if it's a ping message
-	if strings.HasPrefix(dataStr, "PING:") {
-		// Handle ping message (could implement pong response here)
-		log.Printf("Received ping from %s", address)
-		return
-	}
-
-	// Check if it looks like HTTP (starts with HTTP method)
-	if strings.HasPrefix(dataStr, "GET ") || strings.HasPrefix(dataStr, "POST ") ||
-		strings.HasPrefix(dataStr, "PUT ") || strings.HasPrefix(dataStr, "DELETE ") ||
-		strings.HasPrefix(dataStr, "HEAD ") || strings.HasPrefix(dataStr, "OPTIONS ") {
-		log.Printf("Received HTTP request on mesh port from %s - ignoring (use API port 8080 for HTTP)", address)
-		return
-	}
-
-	// Check for other common protocol prefixes that might cause JSON parsing issues
-	if strings.HasPrefix(dataStr, "POST") || strings.HasPrefix(dataStr, "PUT") ||
-		strings.HasPrefix(dataStr, "PATCH") || strings.HasPrefix(dataStr, "OPTIONS") {
-		previewLen := 20
-		if len(dataStr) < previewLen {
-			previewLen = len(dataStr)
-		}
-		log.Printf("Received protocol message on mesh port from %s - ignoring: %s", address, dataStr[:previewLen])
-		return
-	}
-
-	// Try to extract and process multiple JSON messages
-	mm.processMultipleJSONMessages(address, dataStr)
-
-	// Update last ping time
-	mm.mu.Lock()
-	if conn, exists := mm.connections[address]; exists {
-		conn.LastPing = time.Now()
-	}
-	mm.mu.Unlock()
-}
-
-// processMultipleJSONMessages handles multiple JSON messages that might be concatenated
-func (mm *MeshManager) processMultipleJSONMessages(address, dataStr string) {
-	// Find all JSON objects in the data
-	start := 0
-	for start < len(dataStr) {
-		// Find the start of a JSON object
+	for consumed < len(data) {
+		// Find the next JSON object/array start; anything before it is non-JSON.
 		jsonStart := -1
-		for i := start; i < len(dataStr); i++ {
-			if dataStr[i] == '{' || dataStr[i] == '[' {
+		for i := consumed; i < len(data); i++ {
+			if data[i] == '{' || data[i] == '[' {
 				jsonStart = i
 				break
 			}
 		}
-
 		if jsonStart == -1 {
-			// No more JSON objects found
-			break
+			// No JSON ahead: the remainder is PING/junk, safe to discard.
+			mm.logNonJSON(address, data[consumed:])
+			return len(data), processed
+		}
+		if jsonStart > consumed {
+			mm.logNonJSON(address, data[consumed:jsonStart])
 		}
 
-		// Find the end of this JSON object
-		braceCount := 0
-		bracketCount := 0
-		jsonEnd := -1
-		inString := false
-		escapeNext := false
-
-		for i := jsonStart; i < len(dataStr); i++ {
-			char := dataStr[i]
-
-			if escapeNext {
-				escapeNext = false
-				continue
-			}
-
-			if char == '\\' {
-				escapeNext = true
-				continue
-			}
-
-			if char == '"' && !escapeNext {
-				inString = !inString
-				continue
-			}
-
-			if !inString {
-				if char == '{' {
-					braceCount++
-				} else if char == '}' {
-					braceCount--
-					if braceCount == 0 && bracketCount == 0 {
-						jsonEnd = i + 1
-						break
-					}
-				} else if char == '[' {
-					bracketCount++
-				} else if char == ']' {
-					bracketCount--
-					if braceCount == 0 && bracketCount == 0 {
-						jsonEnd = i + 1
-						break
-					}
-				}
-			}
+		end := jsonObjectEnd(data, jsonStart)
+		if end == -1 {
+			// Incomplete object: retain from its start and wait for more data.
+			return jsonStart, processed
 		}
 
-		if jsonEnd == -1 {
-			// Incomplete JSON object, wait for more data
-			break
-		}
-
-		// Extract the JSON message
-		jsonMessage := dataStr[jsonStart:jsonEnd]
-		jsonData := []byte(jsonMessage)
-
-		// Process this JSON message
-		mm.processSingleJSONMessage(address, jsonData)
-
-		// Move to the next potential message
-		start = jsonEnd
+		// Copy out the message so downstream handlers don't alias the buffer.
+		msg := make([]byte, end-jsonStart)
+		copy(msg, data[jsonStart:end])
+		mm.processSingleJSONMessage(address, msg)
+		processed++
+		consumed = end
 	}
 
-	// If there's remaining data that's not JSON, log it
-	if start < len(dataStr) {
-		remaining := dataStr[start:]
-		if len(remaining) > 50 {
-			remaining = remaining[:50] + "..."
-		}
-		if !strings.HasPrefix(remaining, "PING:") {
-			log.Printf("Received non-JSON data from %s after JSON messages: %s", address, remaining)
-		}
+	return consumed, processed
+}
+
+// logNonJSON logs unexpected non-JSON bytes on the mesh stream. PING tokens are
+// expected and ignored silently.
+func (mm *MeshManager) logNonJSON(address string, b []byte) {
+	s := strings.TrimSpace(string(b))
+	if s == "" || strings.HasPrefix(s, "PING:") {
+		return
 	}
+	if len(s) > 40 {
+		s = s[:40] + "..."
+	}
+	log.Printf("Ignoring non-JSON data from %s: %q", address, s)
 }
 
 // processSingleJSONMessage processes a single JSON message
@@ -721,8 +765,7 @@ func (mm *MeshManager) pingPeer(peer *MeshConnection) {
 
 	// Send ping message
 	pingMsg := fmt.Sprintf("PING:%d", start.UnixNano())
-	_, err := peer.Conn.Write([]byte(pingMsg))
-	if err != nil {
+	if err := writeToConn(peer.Conn, []byte(pingMsg)); err != nil {
 		log.Printf("Failed to ping %s: %v", peer.Address, err)
 		return
 	}
@@ -764,8 +807,7 @@ func (mm *MeshManager) SendToMesh(message []byte) error {
 
 	var lastError error
 	for _, peer := range peers {
-		_, err := peer.Conn.Write(message)
-		if err != nil {
+		if err := writeToConn(peer.Conn, message); err != nil {
 			log.Printf("Failed to send to mesh peer %s: %v", peer.Address, err)
 			lastError = err
 		}
@@ -776,18 +818,26 @@ func (mm *MeshManager) SendToMesh(message []byte) error {
 
 // AcceptInboundConnection accepts an inbound connection and adds to mesh
 func (mm *MeshManager) AcceptInboundConnection(conn net.Conn, remoteAddr string) {
+	// Cap concurrent connections to avoid unbounded goroutine/memory growth
+	// from a flood of inbound connections.
+	mm.mu.RLock()
+	nConns := len(mm.connections)
+	mm.mu.RUnlock()
+	if nConns >= maxMeshConnections {
+		log.Printf("Rejecting inbound connection from %s: at max mesh connections (%d)", remoteAddr, maxMeshConnections)
+		conn.Close()
+		return
+	}
+
 	// --- Wallet handshake ---
 	ourWallet := mm.network.Wallet.GetAddress()
-	remoteReader := bufio.NewReader(conn)
-	remoteWallet, err := remoteReader.ReadString('\n')
+	remoteWallet, err := readHandshakeLine(conn)
 	if err != nil {
 		conn.Close()
 		return
 	}
-	remoteWallet = strings.TrimSpace(remoteWallet)
 	// Send our wallet address in response
-	_, err = conn.Write([]byte(ourWallet + "\n"))
-	if err != nil {
+	if err = writeToConn(conn, []byte(ourWallet+"\n")); err != nil {
 		conn.Close()
 		return
 	}
@@ -877,8 +927,7 @@ func (mm *MeshManager) SendMessageToPeer(peerID string, message []byte) error {
 	if !exists || conn.Conn == nil {
 		return fmt.Errorf("peer %s not connected", peerID)
 	}
-	_, err := conn.Conn.Write(message)
-	return err
+	return writeToConn(conn.Conn, message)
 }
 
 // GetStats returns mesh manager statistics

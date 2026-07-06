@@ -127,6 +127,11 @@ mainnet or exposed to the internet until the outstanding items below are closed.
 - **Non-custodial API** — `POST /posts` and `POST /transfers` now accept
   client-signed transactions and the node no longer signs with its own key on a
   caller's behalf; submitted posts are correctly enqueued and gossiped.
+- **Network transport hardening** — the mesh reader now reassembles messages
+  across TCP reads (large/split messages are no longer dropped) with a bounded
+  per-connection buffer; mesh and sync connections have read/write deadlines,
+  the handshake is size-capped and deadlined (anti-slowloris), inbound
+  connections are capped, and the receive path is rate-limited per peer.
 
 ### ⚠️ Outstanding before mainnet (do not deploy yet)
 - **Validator-set agreement** — consensus messages are now authenticated and
@@ -136,9 +141,6 @@ mainnet or exposed to the internet until the outstanding items below are closed.
   and a trust-bootstrapping model are still needed for BFT-grade safety.
 - **Chain reorganization** — the rollback path is currently a no-op; reorgs do
   not correctly revert state.
-- **Network robustness** — TCP message framing, per-connection read deadlines,
-  connection limits, and receive-path rate limiting need work before public
-  exposure.
 - **Uptime mining** trusts unsigned local heartbeats; reward issuance is not yet
   consensus-validated.
 - **Testing/process** — add a `-race` build and external security review to CI
