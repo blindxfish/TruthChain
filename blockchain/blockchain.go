@@ -780,6 +780,11 @@ func (bc *Blockchain) GetNextNonce(address string) int64 {
 	return bc.stateManager.GetNextNonce(address)
 }
 
+// GetNonce returns the current committed nonce for an address (read-only).
+func (bc *Blockchain) GetNonce(address string) int64 {
+	return bc.stateManager.GetNonce(address)
+}
+
 // GetTransferPoolInfo returns information about the transfer pool
 func (bc *Blockchain) GetTransferPoolInfo() map[string]interface{} {
 	bc.mu.RLock()

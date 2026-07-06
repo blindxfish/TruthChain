@@ -1374,6 +1374,7 @@ func (n *TruthChainNode) handleGetWallet(w http.ResponseWriter, r *http.Request)
 	response := map[string]interface{}{
 		"address": address,
 		"balance": balance,
+		"nonce":   n.blockchain.GetNonce(address),
 	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(response)

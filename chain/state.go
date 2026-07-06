@@ -65,6 +65,17 @@ func (sm *StateManager) UpdateWalletState(address string, balance int, nonce int
 	sm.nonces[address] = nonce
 }
 
+// GetNonce returns the current (committed) nonce for an address without
+// mutating anything. A new transaction should use GetNonce(addr)+1.
+func (sm *StateManager) GetNonce(address string) int64 {
+	sm.mu.RLock()
+	defer sm.mu.RUnlock()
+	if w, ok := sm.wallets[address]; ok {
+		return w.Nonce
+	}
+	return 0
+}
+
 // GetNextNonce returns the next nonce for an address
 func (sm *StateManager) GetNextNonce(address string) int64 {
 	sm.mu.Lock()
