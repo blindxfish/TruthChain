@@ -24,7 +24,7 @@ or Docker.
 
 ```bash
 # build
-go build -o truthchain_server cmd/main.go
+go build -o truthchain_server ./cmd
 
 # run a public gateway with a faucet
 TRUTHCHAIN_NETWORK=testnet \

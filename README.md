@@ -44,7 +44,7 @@ git clone https://github.com/blindxfish/truthchain.git
 cd truthchain
 
 # Build the application
-go build -o truthchain_server cmd/main.go
+go build -o truthchain_server ./cmd
 
 # Run TruthChain (interactive setup)
 ./truthchain_server
