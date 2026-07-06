@@ -1,0 +1,29 @@
+{
+  "account": {
+    "privateKeyHex": "0e6b5eb629c3ee724bbd0f1015b75b56b0955791be1d8b0b2fba900a541a1d56",
+    "publicKeyHex": "032387a4e5a09dde6542dc933ef1f2cecd287ccc8397e9c74f67dce850ea9a3819",
+    "address": "1JYVshqLfwMsE59VBLoLRZQfriB2E4nJge"
+  },
+  "recipient": {
+    "privateKeyHex": "5e089b35efddfbdd99c6c49a10be207c72b64bd1ad967f2302af1f8d6733451f",
+    "publicKeyHex": "03921aadd74d61380e17c13cba92e492fb60d021a9859595c716d395b62d7b9f98",
+    "address": "1BpYjY3pfQCKm4uuMGFkvwg9QPDAd16Twn"
+  },
+  "post": {
+    "author": "1JYVshqLfwMsE59VBLoLRZQfriB2E4nJge",
+    "content": "Hello, permanent world — TruthChain interop test.",
+    "timestamp": 1700000000,
+    "hash": "fa3b86e734533647bf6b2cb8d0bb2097553790e034f7bc35e2e7c89c17ba7209",
+    "signature": "20d29dff07999de6a28a2fe75ac8e23e216df9653661d46153ef5aeb7b669af3b50e961a97f5c29c80d3471ea43b7d8b92945488b03a1e66e011dc6937e3909559"
+  },
+  "transfer": {
+    "from": "1JYVshqLfwMsE59VBLoLRZQfriB2E4nJge",
+    "to": "1BpYjY3pfQCKm4uuMGFkvwg9QPDAd16Twn",
+    "amount": 100,
+    "gas_fee": 1,
+    "timestamp": 1700000000,
+    "nonce": 1,
+    "hash": "b8e0a1dafd75df5839490eb22a587019a911d895cabcda5d3d849a4d0eaa51de",
+    "signature": "202ab2ef6eecf8c2128680fafaf9af61baa1067831aff4eecbd7d1e425369042a82a254104679f84e72cb083e264885ee4ac022e042a0d55b4796446de907643af"
+  }
+}
