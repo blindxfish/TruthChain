@@ -24,6 +24,10 @@ type ConsensusEngine struct {
 	// Block index provider
 	blockIndexProvider func() int
 
+	// signer authenticates outgoing proposals and votes with this node's key.
+	// When nil, the node participates read-only (it cannot propose or vote).
+	signer Signer
+
 	// State
 	nodeID    string
 	isRunning bool
@@ -185,8 +189,16 @@ func (ce *ConsensusEngine) HandleBlockProposal(proposal *BlockProposal) error {
 
 	log.Printf("[Consensus] Received block proposal from %s for block %d", proposal.ProposerID, proposal.Index)
 
+	// Only a node with a key can vote. Read-only nodes just track the proposal.
+	if ce.signer == nil {
+		return nil
+	}
+
 	// Vote on the proposal
-	vote := ce.createVote(proposal, true) // For now, always approve valid proposals
+	vote, err := ce.createVote(proposal, true) // For now, always approve valid proposals
+	if err != nil {
+		return fmt.Errorf("failed to create vote: %w", err)
+	}
 	if err := ce.proposalManager.SubmitVote(vote); err != nil {
 		return fmt.Errorf("failed to submit vote: %w", err)
 	}
@@ -237,6 +249,11 @@ func (ce *ConsensusEngine) HandleBlockCreated(block *Block) error {
 
 // tryProposeBlock attempts to propose a block if conditions are met
 func (ce *ConsensusEngine) tryProposeBlock() {
+	// A proposal must be signed; without a key this node cannot propose.
+	if ce.signer == nil {
+		return
+	}
+
 	// Check if we can propose
 	if !ce.trustManager.CanPropose(ce.nodeID) {
 		return
@@ -267,7 +284,12 @@ func (ce *ConsensusEngine) tryProposeBlock() {
 		PostHashes: postHashes,
 		Timestamp:  time.Now().Unix(),
 		TrustScore: ce.trustManager.GetTrustScore(ce.nodeID),
-		Signature:  "", // TODO: Sign the proposal
+	}
+
+	// Authenticate the proposal with this node's key.
+	if err := proposal.Sign(ce.signer); err != nil {
+		log.Printf("[Consensus] Failed to sign proposal: %v", err)
+		return
 	}
 
 	// Submit proposal
@@ -286,16 +308,19 @@ func (ce *ConsensusEngine) tryProposeBlock() {
 	log.Printf("[Consensus] Proposed block %d with %d posts", nextBlockIndex, len(posts))
 }
 
-// createVote creates a vote on a proposal
-func (ce *ConsensusEngine) createVote(proposal *BlockProposal, approved bool) *BlockVote {
-	return &BlockVote{
+// createVote creates and signs a vote on a proposal.
+func (ce *ConsensusEngine) createVote(proposal *BlockProposal, approved bool) (*BlockVote, error) {
+	vote := &BlockVote{
 		Index:      proposal.Index,
 		ProposerID: proposal.ProposerID,
 		VoterID:    ce.nodeID,
 		Timestamp:  time.Now().Unix(),
 		Approved:   approved,
-		Signature:  "", // TODO: Sign the vote
 	}
+	if err := vote.Sign(ce.signer); err != nil {
+		return nil, fmt.Errorf("failed to sign vote: %w", err)
+	}
+	return vote, nil
 }
 
 // validateProposal validates a block proposal
@@ -312,8 +337,15 @@ func (ce *ConsensusEngine) validateProposal(proposal *BlockProposal) error {
 		return fmt.Errorf("wrong number of posts: got %d, want %d", len(proposal.PostHashes), ce.config.PostThreshold)
 	}
 
-	if proposal.TrustScore < ce.config.MinTrustScore {
-		return fmt.Errorf("insufficient trust score: %f < %f", proposal.TrustScore, ce.config.MinTrustScore)
+	// Authenticate the proposer: the signature must recover to ProposerID.
+	if err := proposal.VerifySignature(); err != nil {
+		return fmt.Errorf("proposal signature invalid: %w", err)
+	}
+
+	// Gate on this node's OWN view of the proposer's trust, never the
+	// proposer-supplied TrustScore field (which is attacker-controlled).
+	if localTrust := ce.trustManager.GetTrustScore(proposal.ProposerID); localTrust < ce.config.MinTrustScore {
+		return fmt.Errorf("insufficient trust score: %f < %f", localTrust, ce.config.MinTrustScore)
 	}
 
 	// Validate that all posts exist in mempool
@@ -344,6 +376,12 @@ func (ce *ConsensusEngine) validateVote(vote *BlockVote) error {
 		return fmt.Errorf("voter cannot vote on own proposal")
 	}
 
+	// Authenticate the voter: the signature must recover to VoterID, so votes
+	// cannot be forged on behalf of other nodes to inflate quorum.
+	if err := vote.VerifySignature(); err != nil {
+		return fmt.Errorf("vote signature invalid: %w", err)
+	}
+
 	return nil
 }
 
@@ -359,6 +397,16 @@ func (ce *ConsensusEngine) getNextBlockIndex() int {
 // SetBlockIndexProvider sets a function to get the next block index
 func (ce *ConsensusEngine) SetBlockIndexProvider(provider func() int) {
 	ce.blockIndexProvider = provider
+}
+
+// SetSigner sets the wallet used to sign this node's proposals and votes.
+func (ce *ConsensusEngine) SetSigner(signer Signer) {
+	ce.signer = signer
+}
+
+// SetNetworkSizeProvider configures the validator-set size used for quorum.
+func (ce *ConsensusEngine) SetNetworkSizeProvider(provider func() int) {
+	ce.proposalManager.SetNetworkSizeProvider(provider)
 }
 
 // Background workers
@@ -478,14 +526,25 @@ func (ce *ConsensusEngine) GetStats() map[string]interface{} {
 	}
 }
 
-// HandleProposalExpired handles an expired proposal from another node
+// HandleProposalExpired handles an expired-proposal announcement from another
+// node. The message is unauthenticated, so we do NOT act on its say-so: we only
+// cancel the reservation and penalize the proposer if OUR OWN clock agrees the
+// reservation has actually expired. Otherwise a peer could forge these messages
+// to drain a competitor's trust or cancel a valid reservation.
 func (ce *ConsensusEngine) HandleProposalExpired(expired *ProposalExpired) error {
-	// Remove the reservation
+	reservation, exists := ce.proposalManager.GetReservation(expired.Index)
+	if !exists {
+		return nil
+	}
+
+	if time.Now().Before(reservation.TimeoutAt) {
+		log.Printf("[Consensus] Ignoring premature proposal-expired for block %d from %s", expired.Index, expired.ProposerID)
+		return nil
+	}
+
 	ce.proposalManager.RemoveReservation(expired.Index)
+	ce.trustManager.OnProposalFailure(reservation.Proposer)
 
-	// Decrease trust score for failed proposer
-	ce.trustManager.OnProposalFailure(expired.ProposerID)
-
-	log.Printf("[Consensus] Handled expired proposal for block %d from %s", expired.Index, expired.ProposerID)
+	log.Printf("[Consensus] Locally confirmed expired proposal for block %d (proposer %s)", expired.Index, reservation.Proposer)
 	return nil
 }

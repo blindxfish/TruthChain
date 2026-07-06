@@ -158,13 +158,16 @@ func TestBlockProposalAndVoting(t *testing.T) {
 		t.Fatalf("Failed to submit vote: %v", err)
 	}
 
-	// Check that we have active proposals
+	// The voted proposal has reached quorum (network size defaults to 1, so the
+	// proposer's implicit approval plus one approving vote is enough) and has
+	// been converted into a reservation, so it is no longer an active proposal.
+	// (The engine has no signer here, so it does not auto-propose its own block.)
 	proposals := engine.proposalManager.GetActiveProposals()
-	if len(proposals) != 1 {
-		t.Errorf("Expected 1 active proposal, got %d", len(proposals))
+	if len(proposals) != 0 {
+		t.Errorf("Expected 0 active proposals after reservation, got %d", len(proposals))
 	}
 
-	// Check that we have a reservation (since we voted)
+	// Check that we have a reservation (since we voted and reached quorum)
 	reservations := engine.proposalManager.GetActiveReservations()
 	if len(reservations) != 1 {
 		t.Errorf("Expected 1 active reservation, got %d", len(reservations))

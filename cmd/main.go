@@ -745,7 +745,7 @@ func NewTruthChainNode(config *NodeConfig) (*TruthChainNode, error) {
 	// --- CONSENSUS INTEGRATION ---
 	consensusConfig := chain.DefaultConsensusConfig()
 	consensusConfig.PostThreshold = config.PostThreshold
-	consensusIntegration := chain.NewConsensusIntegration(blockchain, myWallet.GetAddress(), consensusConfig)
+	consensusIntegration := chain.NewConsensusIntegration(blockchain, myWallet, consensusConfig)
 	meshManager := trustNet.MeshManager
 	consensusNetwork := network.NewConsensusNetwork(meshManager, consensusIntegration.ConsensusEngine(), consensusIntegration.SyncManager(), consensusIntegration, myWallet.GetAddress())
 	node.consensusIntegration = consensusIntegration

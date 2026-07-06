@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"math"
 	"sort"
 	"sync"
 	"time"
@@ -266,6 +267,13 @@ type BlockProposalManager struct {
 	votes        map[int][]*BlockVote      // BlockIndex -> Votes
 	mu           sync.RWMutex
 	config       *ConsensusConfig
+
+	// networkSizeProvider returns the number of nodes eligible to participate in
+	// consensus (connected validators including this node). Quorum is computed
+	// against this, not against the number of votes received, so a single
+	// approving vote can never by itself finalize a block. If nil, the network
+	// is treated as size 1 (single-node bootstrap only).
+	networkSizeProvider func() int
 }
 
 // NewBlockProposalManager creates a new proposal manager
@@ -276,6 +284,27 @@ func NewBlockProposalManager(config *ConsensusConfig) *BlockProposalManager {
 		votes:        make(map[int][]*BlockVote),
 		config:       config,
 	}
+}
+
+// SetNetworkSizeProvider configures how the manager learns the current
+// validator-set size for quorum calculation. Set this once during wiring,
+// before the engine starts processing messages.
+func (bpm *BlockProposalManager) SetNetworkSizeProvider(provider func() int) {
+	bpm.mu.Lock()
+	defer bpm.mu.Unlock()
+	bpm.networkSizeProvider = provider
+}
+
+// currentNetworkSize returns the validator-set size (at least 1).
+func (bpm *BlockProposalManager) currentNetworkSize() int {
+	if bpm.networkSizeProvider == nil {
+		return 1
+	}
+	n := bpm.networkSizeProvider()
+	if n < 1 {
+		return 1
+	}
+	return n
 }
 
 // SubmitProposal submits a new block proposal
@@ -301,6 +330,10 @@ func (bpm *BlockProposalManager) SubmitProposal(proposal *BlockProposal) error {
 
 // SubmitVote submits a vote on a proposal
 func (bpm *BlockProposalManager) SubmitVote(vote *BlockVote) error {
+	// Read the network size outside the lock: the provider may consult the
+	// network layer and must not be called while holding bpm.mu.
+	networkSize := bpm.currentNetworkSize()
+
 	bpm.mu.Lock()
 	defer bpm.mu.Unlock()
 
@@ -308,6 +341,12 @@ func (bpm *BlockProposalManager) SubmitVote(vote *BlockVote) error {
 	_, exists := bpm.proposals[vote.Index]
 	if !exists {
 		return fmt.Errorf("no proposal found for block %d", vote.Index)
+	}
+
+	// A node may not vote on its own proposal (the proposer's approval is
+	// implicit); this also prevents a proposer from padding its own quorum.
+	if proposal := bpm.proposals[vote.Index]; proposal != nil && vote.VoterID == proposal.ProposerID {
+		return fmt.Errorf("proposer %s cannot vote on its own block %d", vote.VoterID, vote.Index)
 	}
 
 	// Check if already voted
@@ -321,35 +360,37 @@ func (bpm *BlockProposalManager) SubmitVote(vote *BlockVote) error {
 	bpm.votes[vote.Index] = append(bpm.votes[vote.Index], vote)
 
 	// Check if we have enough votes for approval
-	if bpm.checkApproval(vote.Index) {
+	if bpm.checkApproval(vote.Index, networkSize) {
 		bpm.createReservation(vote.Index)
 	}
 
 	return nil
 }
 
-// checkApproval checks if a proposal has enough votes to be approved
-func (bpm *BlockProposalManager) checkApproval(blockIndex int) bool {
-	// proposal := bpm.proposals[blockIndex]
+// checkApproval reports whether a proposal has reached quorum. Quorum is a
+// fraction (VoteQuorum) of the whole validator set (networkSize), NOT of the
+// votes received — otherwise a single approving vote would always be 100%.
+// The proposer implicitly approves its own block, so it counts as one approval.
+func (bpm *BlockProposalManager) checkApproval(blockIndex int, networkSize int) bool {
 	votes := bpm.votes[blockIndex]
 
-	// Count approved votes
-	approvedCount := 0
+	// Proposer implicitly approves; count distinct approving voters on top.
+	approvedCount := 1
 	for _, vote := range votes {
 		if vote.Approved {
 			approvedCount++
 		}
 	}
 
-	// Calculate approval percentage (simplified - in real implementation,
-	// you'd need to know total online peers)
-	totalVotes := len(votes)
-	if totalVotes == 0 {
-		return false
+	if networkSize < 1 {
+		networkSize = 1
+	}
+	required := int(math.Ceil(bpm.config.VoteQuorum * float64(networkSize)))
+	if required < 1 {
+		required = 1
 	}
 
-	approvalPercentage := float64(approvedCount) / float64(totalVotes)
-	return approvalPercentage >= bpm.config.VoteQuorum
+	return approvedCount >= required
 }
 
 // createReservation creates a reservation for an approved proposal

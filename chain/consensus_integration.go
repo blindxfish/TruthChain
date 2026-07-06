@@ -26,6 +26,7 @@ type ConsensusIntegration struct {
 	// Configuration
 	config *ConsensusConfig
 	nodeID string
+	signer Signer // Signs this node's time-based block requests and votes
 
 	// State
 	isRunning bool
@@ -50,15 +51,20 @@ type ConsensusIntegration struct {
 	onTimeBasedBlockVote    func(*TimeBasedBlockVote) error
 }
 
-// NewConsensusIntegration creates a new consensus integration
+// NewConsensusIntegration creates a new consensus integration. The signer's
+// address is used as this node's consensus identity (nodeID), and its key signs
+// this node's proposals, votes, and time-based block messages.
 func NewConsensusIntegration(
 	blockchain BlockchainInterface,
-	nodeID string,
+	signer Signer,
 	config *ConsensusConfig,
 ) *ConsensusIntegration {
 
+	nodeID := signer.GetAddress()
+
 	// Create consensus engine
 	consensusEngine := NewConsensusEngine(nodeID, config)
+	consensusEngine.SetSigner(signer)
 
 	// Create block builder
 	blockBuilder := NewBlockBuilder(consensusEngine, config.PostThreshold, 10*time.Minute)
@@ -73,6 +79,7 @@ func NewConsensusIntegration(
 		syncManager:             syncManager,
 		config:                  config,
 		nodeID:                  nodeID,
+		signer:                  signer,
 		stopChan:                make(chan struct{}),
 		blockChan:               make(chan *Block, 50),
 		peerIntroductions:       make(map[string]*NodeIntroduction),
@@ -80,6 +87,16 @@ func NewConsensusIntegration(
 		timeBasedBlockVotes:     make(map[string][]*TimeBasedBlockVote),
 		timeBasedBlockApprovals: make(map[string]*TimeBasedBlockApproval),
 	}
+
+	// Quorum for the proposal path is measured against the connected validator
+	// set (peers known to the sync manager, plus this node).
+	consensusEngine.SetNetworkSizeProvider(func() int {
+		peers, err := syncManager.GetConnectedPeers()
+		if err != nil {
+			return 1
+		}
+		return len(peers) + 1
+	})
 
 	// Set up callbacks
 	consensusEngine.SetNetworkCallbacks(
@@ -775,7 +792,9 @@ func (ci *ConsensusIntegration) RequestTimeBasedBlock() error {
 		ProposerID: ci.nodeID,
 		BlockIndex: nextIndex,
 		Timestamp:  time.Now().Unix(),
-		Signature:  "", // TODO: Sign the request
+	}
+	if err := request.Sign(ci.signer); err != nil {
+		return fmt.Errorf("failed to sign time-based block request: %w", err)
 	}
 
 	ci.timeBasedBlockMutex.Lock()
@@ -792,7 +811,9 @@ func (ci *ConsensusIntegration) RequestTimeBasedBlock() error {
 		BlockIndex: nextIndex,
 		Approved:   approved,
 		Timestamp:  time.Now().Unix(),
-		Signature:  "", // TODO: Sign the vote
+	}
+	if err := vote.Sign(ci.signer); err != nil {
+		return fmt.Errorf("failed to sign time-based self-vote: %w", err)
 	}
 
 	// Add our own vote
@@ -814,6 +835,11 @@ func (ci *ConsensusIntegration) HandleTimeBasedBlockRequest(request *TimeBasedBl
 	log.Printf("[ConsensusIntegration] Received time-based block request from %s for block %d",
 		request.ProposerID, request.BlockIndex)
 
+	// Authenticate the request before acting on it.
+	if err := request.VerifySignature(); err != nil {
+		return fmt.Errorf("time-based block request signature invalid: %w", err)
+	}
+
 	// Check if we should approve
 	approved := ci.shouldApproveTimeBasedBlock(request)
 
@@ -823,7 +849,9 @@ func (ci *ConsensusIntegration) HandleTimeBasedBlockRequest(request *TimeBasedBl
 		BlockIndex: request.BlockIndex,
 		Approved:   approved,
 		Timestamp:  time.Now().Unix(),
-		Signature:  "", // TODO: Sign the vote
+	}
+	if err := vote.Sign(ci.signer); err != nil {
+		return fmt.Errorf("failed to sign time-based vote: %w", err)
 	}
 
 	requestID := fmt.Sprintf("time_block_%d_%s", request.BlockIndex, request.ProposerID)
@@ -843,11 +871,24 @@ func (ci *ConsensusIntegration) HandleTimeBasedBlockRequest(request *TimeBasedBl
 
 // HandleTimeBasedBlockVote handles a vote on a time-based block request
 func (ci *ConsensusIntegration) HandleTimeBasedBlockVote(vote *TimeBasedBlockVote) error {
+	// Authenticate the voter so votes cannot be forged for other nodes.
+	if err := vote.VerifySignature(); err != nil {
+		return fmt.Errorf("time-based block vote signature invalid: %w", err)
+	}
+
 	requestID := fmt.Sprintf("time_block_%d_%s", vote.BlockIndex, vote.ProposerID)
 
 	ci.timeBasedBlockMutex.Lock()
 	if ci.timeBasedBlockVotes[requestID] == nil {
 		ci.timeBasedBlockVotes[requestID] = make([]*TimeBasedBlockVote, 0)
+	}
+	// Deduplicate by voter: without this a single peer could replay the same
+	// approving vote to inflate the count past quorum and force a block.
+	for _, existing := range ci.timeBasedBlockVotes[requestID] {
+		if existing.VoterID == vote.VoterID {
+			ci.timeBasedBlockMutex.Unlock()
+			return nil
+		}
 	}
 	ci.timeBasedBlockVotes[requestID] = append(ci.timeBasedBlockVotes[requestID], vote)
 	ci.timeBasedBlockMutex.Unlock()
